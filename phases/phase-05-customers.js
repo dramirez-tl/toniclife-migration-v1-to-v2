@@ -575,6 +575,39 @@ module.exports = async function phase05(v1Pool, v2Pool) {
     },
   }));
 
+  // --- Actualizar users.customer_id (fase 03 los dejó en NULL porque customers no existían) ---
+  logger.table('users', 'Actualizando users.customer_id con customers ya migrados');
+  const userCustomerData = await v1Pool.query(
+    'SELECT id_user, id_customers FROM toniclife.t_users WHERE id_customers IS NOT NULL'
+  );
+  logger.info(`    ${userCustomerData.rows.length.toLocaleString()} users con id_customers en v1`);
+  let userCustomerUpdated = 0;
+  const UC_BATCH = 5000;
+  for (let i = 0; i < userCustomerData.rows.length; i += UC_BATCH) {
+    const batch = userCustomerData.rows.slice(i, i + UC_BATCH);
+    const v2Client = await v2Pool.connect();
+    try {
+      await v2Client.query('BEGIN');
+      for (const row of batch) {
+        const result = await v2Client.query(
+          `UPDATE tonic.users SET customer_id = (
+            SELECT id FROM tonic.customers WHERE legacy_id = $1 LIMIT 1
+          ) WHERE legacy_id = $2 AND customer_id IS NULL`,
+          [row.id_customers, row.id_user]
+        );
+        userCustomerUpdated += result.rowCount;
+      }
+      await v2Client.query('COMMIT');
+    } catch (err) {
+      await v2Client.query('ROLLBACK');
+      logger.error(`    Error actualizando users.customer_id batch: ${err.message}`);
+    } finally {
+      v2Client.release();
+    }
+    logger.progress('users.customer_id', Math.min(i + UC_BATCH, userCustomerData.rows.length), userCustomerData.rows.length);
+  }
+  logger.info(`    ✓ users.customer_id: ${userCustomerUpdated.toLocaleString()} actualizados`);
+
   const totals = allResults.reduce((acc, r) => {
     acc.migrated += r.migrated;
     acc.skipped += r.skipped;
