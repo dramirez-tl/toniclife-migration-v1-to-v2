@@ -1,0 +1,17 @@
+{
+  "name": "toniclife-migration-v1-to-v2",
+  "version": "1.0.0",
+  "description": "Migración de base de datos TonicLife ERP v1 → v2",
+  "main": "index.js",
+  "scripts": {
+    "migrate": "node index.js",
+    "migrate:phase": "node index.js --phase",
+    "validate": "node index.js --validate"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.7",
+    "pg": "^8.13.1",
+    "pg-cursor": "^2.12.1",
+    "slugify": "^1.6.6"
+  }
+}
