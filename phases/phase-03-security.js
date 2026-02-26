@@ -1,7 +1,7 @@
 const logger = require('../utils/logger');
 const idResolver = require('../utils/id-resolver');
 const { processSmallTable, processWithCursor, getCount } = require('../utils/batch-processor');
-const { encryptPassword } = require('../utils/crypto');
+const { hashPassword } = require('../utils/crypto');
 const { cleanString } = require('../utils/validators');
 const config = require('../config');
 
@@ -247,14 +247,14 @@ module.exports = async function phase03(v1Pool, v2Pool) {
     totalCount: userCount,
     batchSize: config.migration.batchSize,
     transformAndInsert: async (row, client) => {
-      // Encriptar contraseña
+      // Hashear contraseña con bcrypt (compatible con NestJS bcrypt.compare)
       let passwordHash = null;
       let mustChangePassword = false;
       if (row.password_user && row.password_user.trim() !== '') {
-        passwordHash = encryptPassword(row.password_user, config.crypto.keyGcm);
+        passwordHash = await hashPassword(row.password_user);
       }
       if (!passwordHash) {
-        passwordHash = encryptPassword('CHANGE_ME_' + row.id_user, config.crypto.keyGcm);
+        passwordHash = await hashPassword('CHANGE_ME_' + row.id_user);
         mustChangePassword = true;
       }
 
@@ -297,6 +297,8 @@ module.exports = async function phase03(v1Pool, v2Pool) {
           customer_id = EXCLUDED.customer_id,
           worker_id = EXCLUDED.worker_id,
           status = EXCLUDED.status,
+          email = NULL,
+          email_verified_at = NULL,
           updated_at = NOW()`,
         [
           row.id_user,                                      // $1

@@ -1,25 +1,15 @@
-const crypto = require('crypto');
+const bcrypt = require('bcrypt');
 
-const ALGORITHM = 'aes-256-gcm';
-const IV = Buffer.alloc(16, 0); // IV fijo, idéntico al backend NestJS
+const SALT_ROUNDS = 12;
 
 /**
- * Encripta una contraseña con AES-256-GCM.
- * Formato resultado: "hexEncrypted:hexAuthTag" — idéntico al backend NestJS.
+ * Hashea una contraseña con bcrypt (compatible con NestJS bcrypt.compare).
+ * @param {string} plainText - Contraseña en texto plano
+ * @returns {Promise<string|null>} Hash bcrypt ($2b$12$...) o null si input vacío
  */
-function encryptPassword(plainText, keyGcm) {
-  if (!plainText || !keyGcm) return null;
-
-  const key = Buffer.isBuffer(keyGcm) ? keyGcm : Buffer.from(keyGcm, 'utf8');
-  if (key.length !== 32) {
-    throw new Error(`KEY_GCM debe tener 32 bytes (256 bits). Recibidos: ${key.length}`);
-  }
-
-  const cipher = crypto.createCipheriv(ALGORITHM, key, IV);
-  let encrypted = cipher.update(plainText, 'utf8', 'hex');
-  encrypted += cipher.final('hex');
-  const authTag = cipher.getAuthTag();
-  return `${encrypted}:${authTag.toString('hex')}`;
+async function hashPassword(plainText) {
+  if (!plainText || !plainText.trim()) return null;
+  return bcrypt.hash(plainText, SALT_ROUNDS);
 }
 
-module.exports = { encryptPassword };
+module.exports = { hashPassword };

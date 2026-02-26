@@ -179,6 +179,7 @@ async function main() {
     connectionTimeoutMillis: 10000,
   });
 
+  const v2IsLocal = ['localhost', '127.0.0.1', '::1'].includes(config.v2.host);
   const v2Pool = new Pool({
     host: config.v2.host,
     port: config.v2.port,
@@ -188,7 +189,7 @@ async function main() {
     max: 10,
     idleTimeoutMillis: 30000,
     connectionTimeoutMillis: 10000,
-    ssl: { rejectUnauthorized: false },
+    ...(v2IsLocal ? {} : { ssl: { rejectUnauthorized: false } }),
   });
 
   // =============================================

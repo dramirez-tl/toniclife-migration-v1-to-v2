@@ -37,10 +37,122 @@ module.exports = async function phase99(v1Pool, v2Pool) {
   const phase99Start = Date.now();
 
   // =============================================
+  // 0. Backfill users.email desde customers (antes de triggers)
+  // =============================================
+  const step0Start = Date.now();
+  logger.info('Paso 0: Backfill users.email desde customers...');
+  try {
+    const result = await v2Pool.query(`
+      UPDATE tonic.users u
+      SET email = c.email,
+          email_verified_at = NOW(),
+          updated_at = NOW()
+      FROM tonic.customers c
+      WHERE u.customer_id = c.id
+        AND u.is_migrated_user = true
+        AND (u.email IS NULL OR u.email = '')
+        AND c.email IS NOT NULL
+        AND c.email <> ''
+    `);
+    logger.info(`  ✓ ${result.rowCount.toLocaleString()} users actualizados con email de customer`);
+  } catch (err) {
+    issues.push(`Error backfill users.email: ${err.message}`);
+    logger.error(`  ✗ ${err.message}`);
+  }
+  logger.info(`  Paso 0 completado en ${elapsed(step0Start)}s`);
+
+  // =============================================
+  // 0b. Re-mapear roles legacy a roles funcionales v2
+  // =============================================
+  const step0bStart = Date.now();
+  logger.info('\nPaso 0b: Re-mapeando roles legacy a roles v2...');
+
+  // Regla 1: Users con customer_id → rol 'customer'
+  logger.info('  [1/3] Distribuidores (customer_id NOT NULL) → rol customer...');
+  try {
+    const customerRoleResult = await v2Pool.query(`
+      UPDATE tonic.users u
+      SET role_id = (SELECT id FROM tonic.roles WHERE code = 'customer' LIMIT 1),
+          updated_at = NOW()
+      FROM tonic.roles r
+      WHERE r.id = u.role_id
+        AND u.is_migrated_user = true
+        AND u.customer_id IS NOT NULL
+        AND r.code <> 'customer'
+    `);
+    logger.info(`  ✓ ${customerRoleResult.rowCount.toLocaleString()} distribuidores → rol 'customer'`);
+
+    // Regla 2: Workers con roles legacy → roles v2 funcionales
+    logger.info('  [2/3] Workers con roles legacy → roles funcionales...');
+    const workerRoleMappings = [
+      ['ventas',                  'ventas_mostrador'],
+      ['clientes',                'administrador'],
+      ['asistencia',              'viewer'],
+      ['solicitud-viaticos',      'rh'],
+      ['aprobacion-viaticos',     'rh'],
+      ['productos',               'almacen'],
+      ['inventario',              'almacen'],
+      ['ventas-totales-sucursal', 'ventas_mostrador'],
+      ['documentos',              'contabilidad'],
+      ['corte-caja-sucursal',     'ventas_mostrador'],
+      ['puntos-periodo',          'viewer'],
+      ['rrhh-trabajadores',       'rh'],
+      ['factura-libre',           'contabilidad'],
+      ['cliente-dashboard',       'viewer'],
+    ];
+
+    let workersMapped = 0;
+    for (const [oldCode, newCode] of workerRoleMappings) {
+      const result = await v2Pool.query(`
+        UPDATE tonic.users u
+        SET role_id = (SELECT id FROM tonic.roles WHERE code = $1 LIMIT 1),
+            updated_at = NOW()
+        FROM tonic.roles r
+        WHERE r.id = u.role_id
+          AND r.code = $2
+          AND u.is_migrated_user = true
+          AND u.worker_id IS NOT NULL
+      `, [newCode, oldCode]);
+      if (result.rowCount > 0) {
+        logger.info(`    ${result.rowCount} workers: '${oldCode}' → '${newCode}'`);
+        workersMapped += result.rowCount;
+      }
+    }
+    logger.info(`  ✓ ${workersMapped} workers re-mapeados`);
+
+    // Fallback: cualquier migrado con rol no reconocido → 'viewer'
+    logger.info('  [3/3] Fallback: roles no reconocidos → viewer...');
+    const fallbackResult = await v2Pool.query(`
+      UPDATE tonic.users u
+      SET role_id = (SELECT id FROM tonic.roles WHERE code = 'viewer' LIMIT 1),
+          updated_at = NOW()
+      FROM tonic.roles r
+      WHERE r.id = u.role_id
+        AND u.is_migrated_user = true
+        AND r.code NOT IN (
+          'super_admin', 'administrador', 'subadmin', 'almacen',
+          'ventas_mostrador', 'rh', 'contabilidad', 'auditor', 'viewer',
+          'customer'
+        )
+    `);
+    if (fallbackResult.rowCount > 0) {
+      logger.info(`  ⚠ ${fallbackResult.rowCount} users con rol no reconocido → 'viewer' (fallback)`);
+    } else {
+      logger.info('  ✓ Sin roles huérfanos');
+    }
+
+    logger.info(`  Resumen: ${customerRoleResult.rowCount.toLocaleString()} distribuidores, ${workersMapped} workers, ${fallbackResult.rowCount} fallback`);
+  } catch (err) {
+    issues.push(`Error re-mapeando roles: ${err.message}`);
+    logger.error(`  ✗ ${err.message}`);
+  }
+  logger.info(`  Paso 0b completado en ${elapsed(step0bStart)}s`);
+
+  // =============================================
   // 1. Re-habilitar triggers
   // =============================================
   const step1Start = Date.now();
-  logger.info('Paso 1: Re-habilitando triggers...');
+  logger.info('\nPaso 1: Re-habilitando triggers...');
   try {
     await enableAllTriggers(v2Pool);
     logger.info('  ✓ Triggers re-habilitados');
