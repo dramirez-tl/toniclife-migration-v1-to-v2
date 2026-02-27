@@ -1,7 +1,8 @@
 const logger = require('../utils/logger');
 const idResolver = require('../utils/id-resolver');
 const { processSmallTable, processWithCursor, getCount } = require('../utils/batch-processor');
-const { cleanString, slugify, validateEnum, toDecimal, toBoolean, prefixUrl } = require('../utils/validators');
+const { cleanString, slugify, validateEnum, toDecimal, toBoolean } = require('../utils/validators');
+const { uploadFile } = require('../utils/gcs-uploader');
 const config = require('../config');
 
 module.exports = async function phase04(v1Pool, v2Pool) {
@@ -321,7 +322,7 @@ module.exports = async function phase04(v1Pool, v2Pool) {
       const productId = await idResolver.resolve(v2Pool, 'product', row.id_product);
       if (!productId) return 'skipped';
 
-      const imageUrl = prefixUrl(row.file_photo);
+      const imageUrl = await uploadFile(row.file_photo, `products/images/${row.id_product}`);
       if (!imageUrl) return 'skipped';
 
       const { rows } = await client.query(

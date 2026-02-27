@@ -218,6 +218,26 @@ async function main() {
   }
 
   // =============================================
+  // Inicializar GCS (si habilitado)
+  // =============================================
+  const gcsUploader = require('./utils/gcs-uploader');
+  if (config.gcs.enabled) {
+    logger.info('\nInicializando Google Cloud Storage...');
+    try {
+      const ready = await gcsUploader.init();
+      if (ready) {
+        logger.info(`  GCS configurado: bucket=${config.gcs.bucketName}, concurrency=${config.gcs.concurrency}`);
+      } else {
+        logger.warn('  GCS no se pudo inicializar. Archivos usarán prefixUrl fallback.');
+      }
+    } catch (err) {
+      logger.warn(`  Error inicializando GCS: ${err.message}. Archivos usarán prefixUrl fallback.`);
+    }
+  } else {
+    logger.info('\nGCS deshabilitado (GCS_ENABLED!=true). Archivos usarán URLs con prefixUrl.');
+  }
+
+  // =============================================
   // Ejecutar fases
   // =============================================
   const phaseResults = {};
@@ -290,11 +310,17 @@ async function main() {
   logger.info(`Registros omitidos: ${totalSkipped.toLocaleString()}`);
   logger.info(`Registros fallidos: ${totalFailed.toLocaleString()}`);
   logger.info(`Errores totales: ${allErrors.length}`);
+  if (config.gcs.enabled) {
+    const gcsStats = gcsUploader.getStats();
+    logger.info(`GCS archivos: ${gcsStats.uploaded} subidos, ${gcsStats.alreadyExisted} ya existían, ${gcsStats.failed} fallidos`);
+  }
   console.log('');
 
-  // Resumen por fase
+  // Resumen por fase (en orden de ejecución, no en orden de Object.entries)
   logger.info('Resumen por fase:');
-  for (const [key, result] of Object.entries(phaseResults)) {
+  for (const key of phasesToRun) {
+    const result = phaseResults[key];
+    if (!result) continue;
     const status = result.crashed ? '✗' : '✓';
     const parts = [];
     if (result.migrated) parts.push(`migrados: ${result.migrated.toLocaleString()}`);

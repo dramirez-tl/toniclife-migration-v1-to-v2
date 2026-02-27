@@ -1,7 +1,8 @@
 const logger = require('../utils/logger');
 const idResolver = require('../utils/id-resolver');
 const { processSmallTable, processWithCursor, getCount } = require('../utils/batch-processor');
-const { cleanString, cleanTrunc, toBoolean, toDecimal, validateEnum, prefixUrl } = require('../utils/validators');
+const { cleanString, cleanTrunc, toBoolean, toDecimal, validateEnum } = require('../utils/validators');
+const { uploadMultiple } = require('../utils/gcs-uploader');
 const { mapValue, CUSTOMER_STATUS, KIT_TYPE, LANGUAGE_CODE } = require('../mappings/value-maps');
 const config = require('../config');
 
@@ -164,6 +165,15 @@ module.exports = async function phase05(v1Pool, v2Pool) {
         commissionTaxRegimeId = commTaxMap[row.tax_regime_customers] || null;
       }
 
+      // Upload customer documents to GCS (runs 5 uploads concurrently, skips NULLs)
+      const [photoUrl, contractUrl, ineUrl, bankStatementUrl, taxIdUrl] = await uploadMultiple([
+        { rawPath: row.file_photo_customers,   gcsFolder: `customers/${row.id_customers}/photo` },
+        { rawPath: row.file_contract,          gcsFolder: `customers/${row.id_customers}/contract` },
+        { rawPath: row.file_ine,              gcsFolder: `customers/${row.id_customers}/ine` },
+        { rawPath: row.file_cuenta_bancaria,   gcsFolder: `customers/${row.id_customers}/bank-statement` },
+        { rawPath: row.file_constancia_fiscal, gcsFolder: `customers/${row.id_customers}/tax-id` },
+      ]);
+
       await client.query(
         `INSERT INTO tonic.customers (
           id, legacy_id, customer_number, first_name, last_name, mothers_last_name,
@@ -237,11 +247,11 @@ module.exports = async function phase05(v1Pool, v2Pool) {
           row.date_registration || null,                            // $23 registration_date
           row.last_date_purchase_customers || null,                 // $24 last_purchase_date
           toDecimal(row.average_purchase_month),                    // $25 average_monthly_purchase
-          prefixUrl(row.file_photo_customers),                       // $26 photo_url
-          prefixUrl(row.file_contract),                              // $27 contract_url
-          prefixUrl(row.file_ine),                                   // $28 ine_document_url
-          prefixUrl(row.file_cuenta_bancaria),                       // $29 bank_statement_url
-          prefixUrl(row.file_constancia_fiscal),                     // $30 tax_id_document_url
+          photoUrl,                                                  // $26 photo_url
+          contractUrl,                                               // $27 contract_url
+          ineUrl,                                                    // $28 ine_document_url
+          bankStatementUrl,                                          // $29 bank_statement_url
+          taxIdUrl,                                                  // $30 tax_id_document_url
           toBoolean(row.data_validated),                            // $31 documents_validated
           toBoolean(row.terms_accepted),                            // $32 terms_accepted
           row.terms_date || null,                                   // $33 terms_accepted_at
@@ -550,10 +560,16 @@ module.exports = async function phase05(v1Pool, v2Pool) {
       if (row.subscription_status === 0 || row.subscription_status === '0') status = 'cancelled';
       else if (row.subscription_status !== 1 && row.subscription_status !== '1') status = 'inactive';
 
-      const subType = cleanString(row.subscription_type) || null;
-      const notes = row.method_subscription_id
-        ? `method_id: ${row.method_subscription_id}`
-        : null;
+      // v1 subscription_type es enum: PAYPAL, MERCADO_PAGO
+      // v2 CHECK: monthly_autoship, quarterly, annual
+      // Mapear todo a monthly_autoship (suscripciones recurrentes mensuales)
+      const SUBSCRIPTION_TYPE_MAP = { paypal: 'monthly_autoship', mercado_pago: 'monthly_autoship' };
+      const rawSubType = (cleanString(row.subscription_type) || '').toLowerCase();
+      const subType = SUBSCRIPTION_TYPE_MAP[rawSubType] || 'monthly_autoship';
+      const noteParts = [];
+      if (row.subscription_type) noteParts.push(`v1_type: ${row.subscription_type}`);
+      if (row.method_subscription_id) noteParts.push(`method_id: ${row.method_subscription_id}`);
+      const notes = noteParts.length > 0 ? noteParts.join(', ') : null;
 
       const { rows } = await client.query(
         `INSERT INTO tonic.customer_subscriptions (

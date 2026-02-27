@@ -1,7 +1,8 @@
 const logger = require('../utils/logger');
 const idResolver = require('../utils/id-resolver');
 const { processSmallTable } = require('../utils/batch-processor');
-const { cleanString, cleanTrunc, toDecimal, prefixUrl } = require('../utils/validators');
+const { cleanString, cleanTrunc, toDecimal } = require('../utils/validators');
+const { uploadFile } = require('../utils/gcs-uploader');
 
 module.exports = async function phase10b(v1Pool, v2Pool) {
   logger.phase('10.5', 'Proveedores y Compras');
@@ -117,6 +118,7 @@ module.exports = async function phase10b(v1Pool, v2Pool) {
       if (!branchId) return 'skipped';
 
       const totalAmount = toDecimal(row.amount, 0);
+      const fileUrl = await uploadFile(row.file_path, `purchase-orders/${row.id}`);
 
       // purchase_orders has no UNIQUE index on legacy_id — use NOT EXISTS for idempotency
       await client.query(
@@ -139,7 +141,7 @@ module.exports = async function phase10b(v1Pool, v2Pool) {
           totalAmount,                  // subtotal  ← amount (only column available)
           0,                            // tax_amount — not available in v1
           totalAmount,                  // total_amount ← amount (only column available)
-          prefixUrl(row.file_path),     // file_url ← file_path
+          fileUrl,                  // file_url ← file_path
           row.id,
         ]
       );

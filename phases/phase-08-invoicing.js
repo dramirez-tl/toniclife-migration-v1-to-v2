@@ -1,7 +1,8 @@
 const logger = require('../utils/logger');
 const idResolver = require('../utils/id-resolver');
 const { processWithCursor, getCount } = require('../utils/batch-processor');
-const { cleanString, cleanTrunc, toDecimal, prefixUrl } = require('../utils/validators');
+const { cleanString, cleanTrunc, toDecimal } = require('../utils/validators');
+const { uploadFile } = require('../utils/gcs-uploader');
 const config = require('../config');
 
 module.exports = async function phase08(v1Pool, v2Pool) {
@@ -40,6 +41,10 @@ module.exports = async function phase08(v1Pool, v2Pool) {
       if (!branchId) return 'skipped';
 
       const invoiceNumber = `FAC-${row.id_factura_libre}`;
+      const xmlFilePath = await uploadFile(
+        row.name_path && !String(row.name_path).includes('/') ? `files/facturama/${row.name_path}` : row.name_path,
+        `invoices/xml/${row.id_factura_libre}`
+      );
 
       await client.query(
         `INSERT INTO tonic.invoices (
@@ -79,7 +84,7 @@ module.exports = async function phase08(v1Pool, v2Pool) {
           toDecimal(row.iva, 0),                                    // $12
           toDecimal(row.total, 0),                                  // $13
           cleanString(row.facturama_id),                            // $14
-          prefixUrl(row.name_path && !String(row.name_path).includes('/') ? `files/facturama/${row.name_path}` : row.name_path), // $15 — nombres desnudos van a files/facturama/
+          xmlFilePath,                                                  // $15 — xml a GCS o prefixUrl fallback
           null,                                                     // $16 pdf_file_path no existe en v1
           row.facturama_id ? 'stamped' : 'pending',                 // $17
           row.created_at || null,                                   // $18
@@ -157,6 +162,7 @@ module.exports = async function phase08(v1Pool, v2Pool) {
 
       // Usar un legacy_id offset para evitar colisión con t_factura_libre
       const legacyId = Number(row.id_bono_factura) + 10000000;
+      const xmlFilePath = await uploadFile(row.path_file, `invoices/xml/bono-${row.id_bono_factura}`);
 
       await client.query(
         `INSERT INTO tonic.invoices (
@@ -187,7 +193,7 @@ module.exports = async function phase08(v1Pool, v2Pool) {
           toDecimal(row.isr, 0),                                    // tax_amount ← isr
           toDecimal(row.total, 0),
           cleanString(row.facturama_id),                            // sat_uuid
-          prefixUrl(row.path_file),                                  // xml_file_path ← path_file
+          xmlFilePath,                                                  // xml_file_path ← path_file → GCS
           null,                                                     // pdf_file_path - no existe en v1
           row.facturama_id ? 'stamped' : 'pending',                 // provider_status
         ]

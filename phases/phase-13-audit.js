@@ -1,7 +1,8 @@
 const logger = require('../utils/logger');
 const idResolver = require('../utils/id-resolver');
 const { processSmallTable, processWithCursor, getCount } = require('../utils/batch-processor');
-const { cleanString, validateEnum, prefixUrl } = require('../utils/validators');
+const { cleanString, validateEnum } = require('../utils/validators');
+const { uploadFile } = require('../utils/gcs-uploader');
 const config = require('../config');
 
 module.exports = async function phase13(v1Pool, v2Pool) {
@@ -114,6 +115,7 @@ module.exports = async function phase13(v1Pool, v2Pool) {
       if (!VALID_FILE_TYPES.includes(fileType)) fileType = 'other';
 
       const code = (row.code_file || `FILE-${row.id_file}`).toString().substring(0, 50);
+      const fileUrl = await uploadFile(row.url_file || row.path_file, `system-files/${row.id_file}`);
 
       await client.query(
         `INSERT INTO tonic.system_files (
@@ -130,7 +132,7 @@ module.exports = async function phase13(v1Pool, v2Pool) {
           code,
           cleanString(row.name_file) || code,
           fileType,
-          prefixUrl(row.url_file || row.path_file) || '',
+          fileUrl || '',
           cleanString(row.mime_type_file),
           row.size_file || null,
           cleanString(row.module_file),

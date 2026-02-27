@@ -34,4 +34,13 @@ module.exports = {
     batchSize: parseInt(process.env.BATCH_SIZE || '5000'),
     logLevel: process.env.LOG_LEVEL || 'info',
   },
+  gcs: {
+    enabled: process.env.GCS_ENABLED === 'true',
+    projectId: process.env.GCS_PROJECT_ID,
+    bucketName: process.env.GCS_BUCKET_NAME,
+    credentials: process.env.GCS_CREDENTIALS,
+    concurrency: parseInt(process.env.GCS_CONCURRENCY || '8'),
+    retryAttempts: parseInt(process.env.GCS_RETRY_ATTEMPTS || '3'),
+    sourceBaseUrl: 'https://tonic-life.net',
+  },
 };
