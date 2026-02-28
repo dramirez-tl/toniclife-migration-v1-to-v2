@@ -14,10 +14,10 @@ Opciones:
   --dry-run               Conectar y mostrar plan sin ejecutar
   --help, -h              Mostrar esta ayuda
 
-Fases: 0(Infra), 1(Catálogos), 2(Sucursales), 3(Seguridad), 4(Productos),
-       5(Clientes), 6(Red MLM), 7(Ventas), 8(Facturación), 9(Comisiones),
-       10(Inventario), 10b(Proveedores), 11(RRHH), 12(Comunicación),
-       13(Auditoría), 99(Post-Migración)
+Fases: 0(Infra), 1(Catálogos), 2(Sucursales), 3(Seguridad), 3b(Fix Passwords),
+       4(Productos), 5(Clientes), 6(Red MLM), 7(Ventas), 8(Facturación),
+       9(Comisiones), 10(Inventario), 10b(Proveedores), 11(RRHH),
+       12(Comunicación), 13(Auditoría), 99(Post-Migración)
 
 Requiere .env con credenciales. Copia .env.example como plantilla.
 `);
@@ -37,6 +37,7 @@ const PHASES = {
   1:   { name: 'Catálogos Base',             module: './phases/phase-01-catalogs' },
   2:   { name: 'Sucursales',                 module: './phases/phase-02-branches' },
   3:   { name: 'Seguridad y Acceso',         module: './phases/phase-03-security' },
+  '3b': { name: 'Fix Contraseñas bcrypt',    module: './phases/phase-03b-fix-passwords' },
   4:   { name: 'Productos',                  module: './phases/phase-04-products' },
   5:   { name: 'Clientes/Distribuidores',    module: './phases/phase-05-customers' },
   6:   { name: 'Red MLM',                    module: './phases/phase-06-network' },
@@ -53,7 +54,7 @@ const PHASES = {
 };
 
 // Orden de ejecución por defecto (todas las fases)
-const DEFAULT_ORDER = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, '10b', 11, 12, 13, 14, 99];
+const DEFAULT_ORDER = [0, 1, 2, 3, '3b', 4, 5, 6, 7, 8, 9, 10, '10b', 11, 12, 13, 14, 99];
 
 // =============================================
 // Parseo de argumentos
@@ -72,7 +73,7 @@ function parseArgs() {
     if (arg === '--phase' || arg === '-p') {
       const val = args[++i];
       if (val !== undefined) {
-        const phaseKey = val === '10b' ? '10b' : Number(val);
+        const phaseKey = (val === '10b' || val === '3b') ? val : Number(val);
         if (PHASES[phaseKey]) {
           options.phases.push(phaseKey);
         } else {
