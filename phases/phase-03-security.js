@@ -320,6 +320,41 @@ module.exports = async function phase03(v1Pool, v2Pool) {
     },
   }));
 
+  // --- Corrección: password_hash de bcrypt → AES-256-GCM ---
+  logger.info('    Corrigiendo password_hash de bcrypt → AES-256-GCM...');
+  const { encrypt } = require('../utils/crypto');
+  const PASS_BATCH = 5000;
+  const passData = await v1Pool.query(
+    "SELECT id_user, password_user FROM toniclife.t_users WHERE password_user IS NOT NULL AND password_user != '' ORDER BY id_user"
+  );
+  let passUpdated = 0;
+  for (let i = 0; i < passData.rows.length; i += PASS_BATCH) {
+    const batch = passData.rows.slice(i, i + PASS_BATCH);
+    const v2Client = await v2Pool.connect();
+    try {
+      await v2Client.query('BEGIN');
+      for (const row of batch) {
+        const encrypted = encrypt(row.password_user);
+        if (encrypted) {
+          const result = await v2Client.query(
+            `UPDATE tonic.users SET password_hash = $1, updated_at = NOW()
+             WHERE legacy_id = $2 AND password_hash LIKE '$2b$%'`,
+            [encrypted, row.id_user]
+          );
+          passUpdated += result.rowCount;
+        }
+      }
+      await v2Client.query('COMMIT');
+    } catch (err) {
+      try { await v2Client.query('ROLLBACK'); } catch (_) {}
+      logger.error(`    Error corrigiendo passwords batch: ${err.message}`);
+    } finally {
+      v2Client.release();
+    }
+    logger.progress('password fix', Math.min(i + PASS_BATCH, passData.rows.length), passData.rows.length);
+  }
+  logger.info(`    password_hash corregidos: ${passUpdated.toLocaleString()}`);
+
   // --- user_branches ---
   logger.table('user_branches', 'Migrando t_users_branch_office → user_branches');
   allResults.push(await processSmallTable({

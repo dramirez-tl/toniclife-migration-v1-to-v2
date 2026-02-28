@@ -34,6 +34,9 @@ module.exports = {
     batchSize: parseInt(process.env.BATCH_SIZE || '5000'),
     logLevel: process.env.LOG_LEVEL || 'info',
   },
+  crypto: {
+    keyGcm: process.env.KEY_GCM || '',
+  },
   gcs: {
     enabled: process.env.GCS_ENABLED === 'true',
     projectId: process.env.GCS_PROJECT_ID,
