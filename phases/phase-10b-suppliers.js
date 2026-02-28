@@ -1,8 +1,7 @@
 const logger = require('../utils/logger');
 const idResolver = require('../utils/id-resolver');
 const { processSmallTable } = require('../utils/batch-processor');
-const { cleanString, cleanTrunc, toDecimal } = require('../utils/validators');
-const { uploadFile } = require('../utils/gcs-uploader');
+const { cleanString, cleanTrunc, toDecimal, prefixUrl } = require('../utils/validators');
 
 module.exports = async function phase10b(v1Pool, v2Pool) {
   logger.phase('10.5', 'Proveedores y Compras');
@@ -22,7 +21,10 @@ module.exports = async function phase10b(v1Pool, v2Pool) {
         `INSERT INTO tonic.company_entities (
           id, company_name, rfc, legal_name, legacy_id, is_active
         ) VALUES (gen_random_uuid(), $1, NULL, NULL, $2, true)
-        ON CONFLICT (legacy_id) DO NOTHING`,
+        ON CONFLICT (legacy_id) DO UPDATE SET
+          company_name = EXCLUDED.company_name,
+          is_active = EXCLUDED.is_active,
+          updated_at = NOW()`,
         [
           cleanString(row.name_company) || `COMP${row.id_company}`,
           row.id_company,
@@ -45,7 +47,11 @@ module.exports = async function phase10b(v1Pool, v2Pool) {
         `INSERT INTO tonic.cost_centers (
           id, code, name, legacy_id, is_active
         ) VALUES (gen_random_uuid(), $1, $2, $3, true)
-        ON CONFLICT (legacy_id) DO NOTHING`,
+        ON CONFLICT (legacy_id) DO UPDATE SET
+          code = EXCLUDED.code,
+          name = EXCLUDED.name,
+          is_active = EXCLUDED.is_active,
+          updated_at = NOW()`,
         [
           `CC-${row.id}`,
           cleanString(row.cost_center_name) || `Centro ${row.id}`,
@@ -79,7 +85,15 @@ module.exports = async function phase10b(v1Pool, v2Pool) {
           $4, $5, $6,
           $7, true
         )
-        ON CONFLICT (legacy_id) DO NOTHING`,
+        ON CONFLICT (legacy_id) DO UPDATE SET
+          supplier_code = EXCLUDED.supplier_code,
+          supplier_name = EXCLUDED.supplier_name,
+          rfc = EXCLUDED.rfc,
+          bank_name = EXCLUDED.bank_name,
+          bank_account_number = EXCLUDED.bank_account_number,
+          bank_account_clabe = EXCLUDED.bank_account_clabe,
+          is_active = EXCLUDED.is_active,
+          updated_at = NOW()`,
         [
           `SUP-${row.id}`,
           cleanString(row.supplier_name) || `Proveedor ${row.id}`,
@@ -118,7 +132,7 @@ module.exports = async function phase10b(v1Pool, v2Pool) {
       if (!branchId) return 'skipped';
 
       const totalAmount = toDecimal(row.amount, 0);
-      const fileUrl = await uploadFile(row.file_path, `purchase-orders/${row.id}`);
+      const fileUrl = prefixUrl(row.file_path);
 
       // purchase_orders has no UNIQUE index on legacy_id — use NOT EXISTS for idempotency
       await client.query(

@@ -1,18 +1,17 @@
 const logger = require('../utils/logger');
 const idResolver = require('../utils/id-resolver');
-const { processSmallTable, processWithCursor, getCount } = require('../utils/batch-processor');
-const { cleanString, validateEnum } = require('../utils/validators');
-const { uploadFile } = require('../utils/gcs-uploader');
+const { processSmallTable, processWithCursorBulk, buildMultiRowInsertWithUUID, getCount } = require('../utils/batch-processor');
+const { cleanString, prefixUrl } = require('../utils/validators');
 const config = require('../config');
 
 module.exports = async function phase13(v1Pool, v2Pool) {
   logger.phase('13', 'Auditoría, Logs y Configuración');
   const allResults = [];
 
-  // --- access_logs (1.6M registros) ---
-  logger.table('access_logs', 'Migrando t_logs → access_logs');
-  const logCount = await getCount(v1Pool, 'SELECT COUNT(*) AS count FROM toniclife.t_logs');
-  logger.info(`    Total registros en t_logs: ${logCount.toLocaleString()}`);
+  // Pre-calentar caché de users para access_logs
+  await idResolver.warmUp(v2Pool, [
+    { type: 'user', table: 'users' },
+  ]);
 
   // Mapeo de acciones v1 → v2
   const ACTION_MAP = {
@@ -26,34 +25,37 @@ module.exports = async function phase13(v1Pool, v2Pool) {
   const VALID_ACTIONS = ['login', 'logout', 'refresh_session', 'login_failed', 'password_reset', 'token_refresh'];
   const VALID_DEVICE_TYPES = ['desktop', 'mobile', 'tablet', 'api', 'unknown'];
 
-  allResults.push(await processWithCursor({
+  // --- access_logs (1.6M registros) — BULK ---
+  logger.table('access_logs', 'Migrando t_logs → access_logs (bulk)');
+  const logCount = await getCount(v1Pool, 'SELECT COUNT(*) AS count FROM toniclife.t_logs');
+  logger.info(`    Total registros en t_logs: ${logCount.toLocaleString()}`);
+
+  allResults.push(await processWithCursorBulk({
     v1Pool, v2Pool,
     sourceQuery: 'SELECT * FROM toniclife.t_logs ORDER BY id_log',
     tableName: 'access_logs',
     totalCount: logCount,
     batchSize: config.migration.batchSize,
-    transformAndInsert: async (row, client) => {
-      // Resolver user
-      let userId = null;
-      if (row.id_user) {
-        const userResult = await client.query(
-          'SELECT id FROM tonic.users WHERE legacy_id = $1 LIMIT 1',
-          [row.id_user]
-        );
-        if (userResult.rows.length > 0) userId = userResult.rows[0].id;
-      }
+
+    resolveBatch: async (rows) => {
+      const userLegacyIds = [...new Set(rows.map(r => r.id_user).filter(Boolean))];
+      const userMap = await idResolver.resolveMany(v2Pool, 'user', userLegacyIds, 'users');
+      return { userMap };
+    },
+
+    transformRow: (row, { userMap }) => {
+      const userId = row.id_user ? (userMap.get(String(row.id_user)) || null) : null;
 
       // Mapear acción
       const rawAction = (row.action_log || row.type_log || 'login').toString().toLowerCase().trim();
       let action = ACTION_MAP[rawAction] || null;
       if (!action) {
-        // Intentar mapeo parcial
         if (rawAction.includes('login') && rawAction.includes('fail')) action = 'login_failed';
         else if (rawAction.includes('login')) action = 'login';
         else if (rawAction.includes('logout')) action = 'logout';
         else if (rawAction.includes('refresh')) action = 'refresh_session';
         else if (rawAction.includes('password')) action = 'password_reset';
-        else action = 'login'; // fallback
+        else action = 'login';
       }
       if (!VALID_ACTIONS.includes(action)) action = 'login';
 
@@ -69,39 +71,37 @@ module.exports = async function phase13(v1Pool, v2Pool) {
       }
       if (deviceType && !VALID_DEVICE_TYPES.includes(deviceType)) deviceType = 'unknown';
 
-      await client.query(
-        `INSERT INTO tonic.access_logs (
-          id, user_id, username, action, ip_address,
-          user_agent, device_type, session_id,
-          metadata, created_at
-        ) VALUES (
-          gen_random_uuid(), $1, $2, $3, $4::inet,
-          $5, $6, $7,
-          $8::jsonb, $9
-        )`,
-        [
-          userId,
-          cleanString(row.username_log || row.email_log),
-          action,
-          row.ip_log || row.ip_address_log || null,
-          cleanString(row.user_agent_log),
-          deviceType,
-          cleanString(row.session_id_log),
-          row.id_log ? JSON.stringify({ legacy_id: row.id_log }) : null,
-          row.created_at || row.date_log || new Date(),
-        ]
+      return {
+        user_id: userId,
+        username: cleanString(row.username_log || row.email_log),
+        action,
+        ip_address: row.ip_log || row.ip_address_log || null,
+        user_agent: cleanString(row.user_agent_log),
+        device_type: deviceType,
+        session_id: cleanString(row.session_id_log),
+        metadata: row.id_log ? JSON.stringify({ legacy_id: row.id_log }) : null,
+        created_at: row.created_at || row.date_log || new Date(),
+      };
+    },
+
+    buildInsertSQL: (transformedRows) => {
+      return buildMultiRowInsertWithUUID(
+        'tonic.access_logs',
+        ['user_id', 'username', 'action', 'ip_address', 'user_agent', 'device_type', 'session_id', 'metadata', 'created_at'],
+        transformedRows,
+        '',
+        { ip_address: 'inet', metadata: 'jsonb' }
       );
     },
   }));
 
-  // --- system_files ---
+  // --- system_files (GCS uploads → row-by-row) ---
   logger.table('system_files', 'Migrando t_file → system_files');
   allResults.push(await processSmallTable({
     v1Pool, v2Pool,
     sourceQuery: 'SELECT * FROM toniclife.t_file ORDER BY id_file',
     tableName: 'system_files',
     transformAndInsert: async (row, client) => {
-      // Determinar file_type
       const VALID_FILE_TYPES = ['pdf', 'image', 'drive_link', 'video', 'document', 'other'];
       let fileType = 'other';
       const url = (row.url_file || row.path_file || '').toString().toLowerCase();
@@ -115,7 +115,7 @@ module.exports = async function phase13(v1Pool, v2Pool) {
       if (!VALID_FILE_TYPES.includes(fileType)) fileType = 'other';
 
       const code = (row.code_file || `FILE-${row.id_file}`).toString().substring(0, 50);
-      const fileUrl = await uploadFile(row.url_file || row.path_file, `system-files/${row.id_file}`);
+      const fileUrl = prefixUrl(row.url_file || row.path_file);
 
       await client.query(
         `INSERT INTO tonic.system_files (
@@ -154,28 +154,16 @@ module.exports = async function phase13(v1Pool, v2Pool) {
       const VALID_VALUE_TYPES = ['string', 'number', 'boolean', 'json', 'array', 'image_url'];
       let valueType = 'string';
 
-      // Intentar inferir tipo del valor
       const rawValue = row.value_text || row.content_text || '';
       let jsonValue;
       try {
         const parsed = JSON.parse(rawValue);
-        if (Array.isArray(parsed)) {
-          valueType = 'array';
-          jsonValue = JSON.stringify(parsed);
-        } else if (typeof parsed === 'object') {
-          valueType = 'json';
-          jsonValue = JSON.stringify(parsed);
-        } else if (typeof parsed === 'number') {
-          valueType = 'number';
-          jsonValue = JSON.stringify(parsed);
-        } else if (typeof parsed === 'boolean') {
-          valueType = 'boolean';
-          jsonValue = JSON.stringify(parsed);
-        } else {
-          jsonValue = JSON.stringify(String(rawValue));
-        }
+        if (Array.isArray(parsed)) { valueType = 'array'; jsonValue = JSON.stringify(parsed); }
+        else if (typeof parsed === 'object') { valueType = 'json'; jsonValue = JSON.stringify(parsed); }
+        else if (typeof parsed === 'number') { valueType = 'number'; jsonValue = JSON.stringify(parsed); }
+        else if (typeof parsed === 'boolean') { valueType = 'boolean'; jsonValue = JSON.stringify(parsed); }
+        else { jsonValue = JSON.stringify(String(rawValue)); }
       } catch {
-        // No es JSON, tratar como string
         jsonValue = JSON.stringify(String(rawValue));
       }
 
@@ -193,13 +181,7 @@ module.exports = async function phase13(v1Pool, v2Pool) {
           $5, false, true
         )
         ON CONFLICT DO NOTHING`,
-        [
-          category,
-          key,
-          jsonValue,
-          valueType,
-          cleanString(row.description_text),
-        ]
+        [category, key, jsonValue, valueType, cleanString(row.description_text)]
       );
     },
   }));

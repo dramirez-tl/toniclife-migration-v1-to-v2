@@ -8,8 +8,8 @@ module.exports = async function phase02(v1Pool, v2Pool) {
 
   // Pre-calentar caché de entidades necesarias
   await idResolver.warmUp(v2Pool, [
-    { type: 'country', table: 'countries', column: 'id' },
-    { type: 'currency', table: 'currencies', column: 'id' },
+    { type: 'country', table: 'countries' },
+    { type: 'currency', table: 'currencies' },
   ]);
 
   // --- branches (paso 1: insertar sin parent_branch_id) ---
@@ -47,7 +47,19 @@ module.exports = async function phase02(v1Pool, v2Pool) {
           false, true, true,
           COALESCE($12::boolean, true)
         )
-        ON CONFLICT (code) DO NOTHING
+        ON CONFLICT (code) DO UPDATE SET
+          name = EXCLUDED.name,
+          country_id = EXCLUDED.country_id,
+          currency_code = EXCLUDED.currency_code,
+          rounding_mode = EXCLUDED.rounding_mode,
+          address_street = EXCLUDED.address_street,
+          address_city = EXCLUDED.address_city,
+          address_state = EXCLUDED.address_state,
+          address_zip = EXCLUDED.address_zip,
+          address_phone = EXCLUDED.address_phone,
+          address_email = EXCLUDED.address_email,
+          is_active = EXCLUDED.is_active,
+          updated_at = NOW()
         RETURNING id`,
         [
           code,
@@ -67,11 +79,6 @@ module.exports = async function phase02(v1Pool, v2Pool) {
 
       if (rows.length > 0) {
         await idResolver.registerMapping(v2Pool, 'branch', row.id_branch_office, rows[0].id, 't_branch_office');
-      } else {
-        const existing = await client.query(`SELECT id FROM tonic.branches WHERE code = $1`, [code]);
-        if (existing.rows.length > 0) {
-          await idResolver.registerMapping(v2Pool, 'branch', row.id_branch_office, existing.rows[0].id, 't_branch_office');
-        }
       }
     },
   }));

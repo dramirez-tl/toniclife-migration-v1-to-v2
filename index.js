@@ -48,11 +48,12 @@ const PHASES = {
   11:  { name: 'Recursos Humanos',           module: './phases/phase-11-hr' },
   12:  { name: 'Comunicación',               module: './phases/phase-12-communication' },
   13:  { name: 'Auditoría y Logs',           module: './phases/phase-13-audit' },
+  14:  { name: 'Archivos GCS',               module: './phases/phase-14-gcs-files' },
   99:  { name: 'Post-Migración/Validación',  module: './phases/phase-99-post-migration' },
 };
 
 // Orden de ejecución por defecto (todas las fases)
-const DEFAULT_ORDER = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, '10b', 11, 12, 13, 99];
+const DEFAULT_ORDER = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, '10b', 11, 12, 13, 14, 99];
 
 // =============================================
 // Parseo de argumentos
@@ -186,9 +187,9 @@ async function main() {
     database: config.v2.database,
     user: config.v2.user,
     password: config.v2.password,
-    max: 10,
-    idleTimeoutMillis: 30000,
-    connectionTimeoutMillis: 10000,
+    max: 15,
+    idleTimeoutMillis: 60000,
+    connectionTimeoutMillis: 30000,
     ...(v2IsLocal ? {} : { ssl: { rejectUnauthorized: false } }),
   });
 

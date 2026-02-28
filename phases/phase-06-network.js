@@ -33,6 +33,18 @@ module.exports = async function phase06(v1Pool, v2Pool) {
   `);
   logger.info(`    Nodos raíz (sin nivel=1): ${rootCount}`);
 
+  // Pre-cargar mapa de datos de customers (uuid → {registration_date, is_active})
+  // Elimina ~218K queries individuales en PASO 1
+  logger.info('    Pre-cargando datos de customers...');
+  const custDataRows = await v2Pool.query(
+    'SELECT id, registration_date, is_active FROM tonic.customers'
+  );
+  const customerDataMap = new Map();
+  for (const r of custDataRows.rows) {
+    customerDataMap.set(r.id, { registration_date: r.registration_date, is_active: r.is_active });
+  }
+  logger.info(`    ${customerDataMap.size.toLocaleString()} customers cargados en memoria`);
+
   // Insertar nodos con nivel=1 (tienen padre)
   allResults.push(await processWithCursor({
     v1Pool, v2Pool,
@@ -50,12 +62,8 @@ module.exports = async function phase06(v1Pool, v2Pool) {
       const customerId = await idResolver.resolve(v2Pool, 'customer', row.id_customers, 'customers');
       if (!customerId) return 'skipped';
 
-      // Buscar datos del customer para enrollment_date e is_active
-      const custResult = await client.query(
-        'SELECT registration_date, is_active FROM tonic.customers WHERE id = $1',
-        [customerId]
-      );
-      const cust = custResult.rows[0] || {};
+      // Lookup from pre-loaded Map (eliminates inline SELECT)
+      const cust = customerDataMap.get(customerId) || {};
 
       await client.query(
         `INSERT INTO tonic.network_members (
@@ -67,7 +75,11 @@ module.exports = async function phase06(v1Pool, v2Pool) {
           0, NULL, NULL, 0,
           $2, $3, $4, $5
         )
-        ON CONFLICT (legacy_id) WHERE legacy_id IS NOT NULL DO NOTHING`,
+        ON CONFLICT (legacy_id) WHERE legacy_id IS NOT NULL DO UPDATE SET
+          customer_id = EXCLUDED.customer_id,
+          enrollment_date = EXCLUDED.enrollment_date,
+          is_active = EXCLUDED.is_active,
+          updated_at = NOW()`,
         [
           customerId,
           cust.registration_date || null,
@@ -99,11 +111,8 @@ module.exports = async function phase06(v1Pool, v2Pool) {
         const customerId = await idResolver.resolve(v2Pool, 'customer', row.id_customers, 'customers');
         if (!customerId) continue;
 
-        const custResult = await v2Client.query(
-          'SELECT registration_date, is_active FROM tonic.customers WHERE id = $1',
-          [customerId]
-        );
-        const cust = custResult.rows[0] || {};
+        // Lookup from pre-loaded Map (eliminates inline SELECT)
+        const cust = customerDataMap.get(customerId) || {};
 
         await v2Client.query(
           `INSERT INTO tonic.network_members (
@@ -113,7 +122,11 @@ module.exports = async function phase06(v1Pool, v2Pool) {
             gen_random_uuid(), $1, NULL, 0, NULL, 0,
             $2, $3, $4, $5
           )
-          ON CONFLICT (legacy_id) WHERE legacy_id IS NOT NULL DO NOTHING`,
+          ON CONFLICT (legacy_id) WHERE legacy_id IS NOT NULL DO UPDATE SET
+            customer_id = EXCLUDED.customer_id,
+            enrollment_date = EXCLUDED.enrollment_date,
+            is_active = EXCLUDED.is_active,
+            updated_at = NOW()`,
           [
             customerId,
             cust.registration_date || null,
@@ -134,47 +147,63 @@ module.exports = async function phase06(v1Pool, v2Pool) {
   // PASO 2: UPDATE parent_id (padre directo)
   // ==============================================================
   logger.table('network_members', 'PASO 2: Actualizando parent_id');
-  // Lee relaciones de v1 via Node.js y actualiza en v2 (sin dblink)
-  logger.info('    Actualizando parent_id en batches...');
+  logger.info('    Cargando relaciones padre-hijo de v1...');
   const parentData = await v1Pool.query(`
     SELECT DISTINCT ON (id_customers) id_customers, id_upline
     FROM toniclife.t_red
     WHERE nivel = 1 AND id_upline IS NOT NULL
     ORDER BY id_customers, id_red
   `);
+  logger.info(`    ${parentData.rows.length.toLocaleString()} relaciones cargadas`);
 
+  // Bulk UPDATE con temp table: volcar pares (child_legacy, parent_legacy) → UPDATE JOIN
+  const paso2Client = await v2Pool.connect();
   let parentUpdated = 0;
-  const BATCH = 5000;
-  for (let i = 0; i < parentData.rows.length; i += BATCH) {
-    const batch = parentData.rows.slice(i, i + BATCH);
-    const v2Client = await v2Pool.connect();
-    try {
-      await v2Client.query('BEGIN');
-      for (const row of batch) {
-        const result = await v2Client.query(`
-          UPDATE tonic.network_members nm
-          SET parent_id = (
-            SELECT nm2.id FROM tonic.network_members nm2
-            JOIN tonic.customers c2 ON nm2.customer_id = c2.id
-            WHERE c2.legacy_id = $1
-            LIMIT 1
-          )
-          FROM tonic.customers c
-          WHERE nm.customer_id = c.id
-            AND c.legacy_id = $2
-            AND nm.parent_id IS NULL`,
-          [row.id_upline, row.id_customers]
-        );
-        parentUpdated += result.rowCount;
+  try {
+    await paso2Client.query('BEGIN');
+    await paso2Client.query(`
+      CREATE TEMP TABLE tmp_parent_map (
+        child_legacy  BIGINT NOT NULL,
+        parent_legacy BIGINT NOT NULL
+      ) ON COMMIT DROP
+    `);
+
+    // Insertar en chunks de 10K (para no exceder 65535 params)
+    const CHUNK = 10000;
+    for (let i = 0; i < parentData.rows.length; i += CHUNK) {
+      const chunk = parentData.rows.slice(i, i + CHUNK);
+      const values = [];
+      const params = [];
+      for (let j = 0; j < chunk.length; j++) {
+        const off = j * 2;
+        values.push(`($${off + 1}, $${off + 2})`);
+        params.push(chunk[j].id_customers, chunk[j].id_upline);
       }
-      await v2Client.query('COMMIT');
-    } catch (err) {
-      await v2Client.query('ROLLBACK');
-      logger.error(`    Error batch parent_id: ${err.message}`);
-    } finally {
-      v2Client.release();
+      await paso2Client.query(
+        `INSERT INTO tmp_parent_map (child_legacy, parent_legacy) VALUES ${values.join(',')}`,
+        params
+      );
     }
-    logger.progress('parent_id', Math.min(i + BATCH, parentData.rows.length), parentData.rows.length);
+    logger.info('    Temp table cargada, ejecutando UPDATE JOIN...');
+
+    const updateResult = await paso2Client.query(`
+      UPDATE tonic.network_members nm
+      SET parent_id = parent_nm.id
+      FROM tmp_parent_map t
+      JOIN tonic.customers child_c ON child_c.legacy_id = t.child_legacy
+      JOIN tonic.customers parent_c ON parent_c.legacy_id = t.parent_legacy
+      JOIN tonic.network_members parent_nm ON parent_nm.customer_id = parent_c.id
+      WHERE nm.customer_id = child_c.id
+        AND nm.parent_id IS NULL
+    `);
+    parentUpdated = updateResult.rowCount;
+
+    await paso2Client.query('COMMIT');
+  } catch (err) {
+    await paso2Client.query('ROLLBACK');
+    logger.error(`    Error bulk parent_id: ${err.message}`);
+  } finally {
+    paso2Client.release();
   }
   logger.info(`    ✓ parent_id: ${parentUpdated} actualizados`);
 
@@ -199,49 +228,60 @@ module.exports = async function phase06(v1Pool, v2Pool) {
   // ==============================================================
   logger.table('network_members', 'PASO 4: Recalculando depth, path y children_count');
 
-  // Aumentar work_mem para el CTE recursivo
-  await v2Pool.query("SET LOCAL work_mem = '512MB'");
+  // Usar cliente dedicado con transacción para que SET LOCAL tenga efecto
+  const paso4Client = await v2Pool.connect();
+  try {
+    await paso4Client.query('BEGIN');
+    await paso4Client.query("SET LOCAL work_mem = '512MB'");
 
-  logger.info('    Calculando depth y path con CTE recursivo...');
-  const depthResult = await v2Pool.query(`
-    WITH RECURSIVE tree AS (
-      SELECT id, customer_id, parent_id, legacy_id,
-             0 AS depth,
-             '/' || id::TEXT AS path,
-             '/' || COALESCE(legacy_id::TEXT, id::TEXT) AS path_legacy
-      FROM tonic.network_members
-      WHERE parent_id IS NULL
-      UNION ALL
-      SELECT nm.id, nm.customer_id, nm.parent_id, nm.legacy_id,
-             t.depth + 1,
-             t.path || '/' || nm.id::TEXT,
-             t.path_legacy || '/' || COALESCE(nm.legacy_id::TEXT, nm.id::TEXT)
-      FROM tonic.network_members nm
-      JOIN tree t ON nm.parent_id = t.id
-    )
-    UPDATE tonic.network_members nm
-    SET depth = tree.depth,
-        path = tree.path,
-        path_legacy = tree.path_legacy
-    FROM tree
-    WHERE nm.id = tree.id
-  `);
-  logger.info(`    ✓ depth/path: ${depthResult.rowCount} registros actualizados`);
+    logger.info('    Calculando depth y path con CTE recursivo...');
+    const depthResult = await paso4Client.query(`
+      WITH RECURSIVE tree AS (
+        SELECT id, customer_id, parent_id, legacy_id,
+               0 AS depth,
+               '/' || id::TEXT AS path,
+               '/' || COALESCE(legacy_id::TEXT, id::TEXT) AS path_legacy
+        FROM tonic.network_members
+        WHERE parent_id IS NULL
+        UNION ALL
+        SELECT nm.id, nm.customer_id, nm.parent_id, nm.legacy_id,
+               t.depth + 1,
+               t.path || '/' || nm.id::TEXT,
+               t.path_legacy || '/' || COALESCE(nm.legacy_id::TEXT, nm.id::TEXT)
+        FROM tonic.network_members nm
+        JOIN tree t ON nm.parent_id = t.id
+      )
+      UPDATE tonic.network_members nm
+      SET depth = tree.depth,
+          path = tree.path,
+          path_legacy = tree.path_legacy
+      FROM tree
+      WHERE nm.id = tree.id
+    `);
+    logger.info(`    ✓ depth/path: ${depthResult.rowCount} registros actualizados`);
 
-  // Actualizar children_count
-  logger.info('    Calculando children_count...');
-  const childrenResult = await v2Pool.query(`
-    UPDATE tonic.network_members nm
-    SET children_count = COALESCE(sub.cnt, 0)
-    FROM (
-      SELECT parent_id, COUNT(*) AS cnt
-      FROM tonic.network_members
-      WHERE parent_id IS NOT NULL
-      GROUP BY parent_id
-    ) sub
-    WHERE nm.id = sub.parent_id
-  `);
-  logger.info(`    ✓ children_count: ${childrenResult.rowCount} registros actualizados`);
+    // Actualizar children_count
+    logger.info('    Calculando children_count...');
+    const childrenResult = await paso4Client.query(`
+      UPDATE tonic.network_members nm
+      SET children_count = COALESCE(sub.cnt, 0)
+      FROM (
+        SELECT parent_id, COUNT(*) AS cnt
+        FROM tonic.network_members
+        WHERE parent_id IS NOT NULL
+        GROUP BY parent_id
+      ) sub
+      WHERE nm.id = sub.parent_id
+    `);
+    logger.info(`    ✓ children_count: ${childrenResult.rowCount} registros actualizados`);
+
+    await paso4Client.query('COMMIT');
+  } catch (err) {
+    await paso4Client.query('ROLLBACK');
+    throw err;
+  } finally {
+    paso4Client.release();
+  }
 
   // ==============================================================
   // network_roll_over (extraer nivel=1 de t_red_roll_over)

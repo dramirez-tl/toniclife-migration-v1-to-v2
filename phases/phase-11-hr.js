@@ -17,10 +17,12 @@ module.exports = async function phase11(v1Pool, v2Pool) {
       const jobName = cleanString(row.name_job) || `Puesto ${row.id_job}`;
       await client.query(
         `INSERT INTO tonic.job_positions (id, code, name, legacy_id, is_active)
-         SELECT gen_random_uuid(), $1, $2, $3, true
-         WHERE NOT EXISTS (
-           SELECT 1 FROM tonic.job_positions WHERE legacy_id = $3
-         )`,
+         VALUES (gen_random_uuid(), $1, $2, $3, true)
+         ON CONFLICT (legacy_id) DO UPDATE SET
+           code = EXCLUDED.code,
+           name = EXCLUDED.name,
+           is_active = EXCLUDED.is_active,
+           updated_at = NOW()`,
         [`JOB-${row.id_job}`, jobName, row.id_job]
       );
     },
@@ -36,7 +38,11 @@ module.exports = async function phase11(v1Pool, v2Pool) {
       await client.query(
         `INSERT INTO tonic.departments (id, code, name, legacy_id, is_active)
          VALUES (gen_random_uuid(), $1, $2, $3, true)
-         ON CONFLICT (legacy_id) DO NOTHING`,
+         ON CONFLICT (legacy_id) DO UPDATE SET
+           code = EXCLUDED.code,
+           name = EXCLUDED.name,
+           is_active = EXCLUDED.is_active,
+           updated_at = NOW()`,
         [`DEPT-${row.id}`, cleanString(row.name) || `Depto ${row.id}`, row.id]
       );
     },
@@ -52,10 +58,12 @@ module.exports = async function phase11(v1Pool, v2Pool) {
       const areaName = cleanString(row.name_area) || `Área ${row.id_area}`;
       await client.query(
         `INSERT INTO tonic.work_areas (id, code, name, legacy_id, is_active)
-         SELECT gen_random_uuid(), $1, $2, $3, true
-         WHERE NOT EXISTS (
-           SELECT 1 FROM tonic.work_areas WHERE legacy_id = $3
-         )`,
+         VALUES (gen_random_uuid(), $1, $2, $3, true)
+         ON CONFLICT (legacy_id) DO UPDATE SET
+           code = EXCLUDED.code,
+           name = EXCLUDED.name,
+           is_active = EXCLUDED.is_active,
+           updated_at = NOW()`,
         [`AREA-${row.id_area}`, areaName, row.id_area]
       );
     },
@@ -112,7 +120,23 @@ module.exports = async function phase11(v1Pool, v2Pool) {
           $15, $16, $17, $18
         )
         ON CONFLICT (legacy_id) DO UPDATE SET
+          employee_number = EXCLUDED.employee_number,
+          first_name = EXCLUDED.first_name,
+          last_name = EXCLUDED.last_name,
+          rfc = EXCLUDED.rfc,
+          curp = EXCLUDED.curp,
+          imss_number = EXCLUDED.imss_number,
+          birth_date = EXCLUDED.birth_date,
+          phone = EXCLUDED.phone,
+          email = EXCLUDED.email,
+          hire_date = EXCLUDED.hire_date,
+          department_id = EXCLUDED.department_id,
+          job_position_id = EXCLUDED.job_position_id,
+          work_area_id = EXCLUDED.work_area_id,
+          branch_id = EXCLUDED.branch_id,
+          user_id = EXCLUDED.user_id,
           status = EXCLUDED.status,
+          is_active = EXCLUDED.is_active,
           updated_at = NOW()`,
         [
           cleanTrunc(`EMP-${row.id_employee}`, 20),
