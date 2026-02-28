@@ -1,8 +1,7 @@
 const logger = require('../utils/logger');
 const idResolver = require('../utils/id-resolver');
 const { processSmallTable, processWithCursor, getCount } = require('../utils/batch-processor');
-const { cleanString, cleanTrunc, toBoolean, toDecimal, validateEnum } = require('../utils/validators');
-const { uploadMultiple } = require('../utils/gcs-uploader');
+const { cleanString, cleanTrunc, toBoolean, toDecimal, validateEnum, prefixUrl } = require('../utils/validators');
 const { mapValue, CUSTOMER_STATUS, KIT_TYPE, LANGUAGE_CODE } = require('../mappings/value-maps');
 const config = require('../config');
 
@@ -12,9 +11,9 @@ module.exports = async function phase05(v1Pool, v2Pool) {
 
   // Pre-calentar caché
   await idResolver.warmUp(v2Pool, [
-    { type: 'branch', table: 'branches', column: 'id' },
-    { type: 'price_type', table: 'price_types', column: 'id' },
-    { type: 'country', table: 'countries', column: 'id' },
+    { type: 'branch', table: 'branches' },
+    { type: 'price_type', table: 'price_types' },
+    { type: 'country', table: 'countries' },
   ]);
 
   // Resolver defaults para NOT NULL
@@ -52,7 +51,15 @@ module.exports = async function phase05(v1Pool, v2Pool) {
           $5, $6, $7, $8, $9, true
         )
         ON CONFLICT (legacy_id) DO UPDATE SET
+          code = EXCLUDED.code,
           name = EXCLUDED.name,
+          rank_number = EXCLUDED.rank_number,
+          points_personal_required = EXCLUDED.points_personal_required,
+          points_group_required = EXCLUDED.points_group_required,
+          qualifiers_first_level = EXCLUDED.qualifiers_first_level,
+          level_max = EXCLUDED.level_max,
+          generation_max = EXCLUDED.generation_max,
+          is_active = EXCLUDED.is_active,
           updated_at = NOW()`,
         [
           code,
@@ -84,7 +91,12 @@ module.exports = async function phase05(v1Pool, v2Pool) {
           gen_random_uuid(), $1, $2, $3, $4, $5, $6, true
         )
         ON CONFLICT (legacy_id) DO UPDATE SET
+          level_number = EXCLUDED.level_number,
+          name = EXCLUDED.name,
           base_percentage = EXCLUDED.base_percentage,
+          upgraded_percentage = EXCLUDED.upgraded_percentage,
+          qualifiers_required = EXCLUDED.qualifiers_required,
+          is_active = EXCLUDED.is_active,
           updated_at = NOW()`,
         [
           row.number_nivel || row.id_nivel,
@@ -110,7 +122,9 @@ module.exports = async function phase05(v1Pool, v2Pool) {
           id, generation_number, percentage, legacy_id, is_active
         ) VALUES (gen_random_uuid(), $1, $2, $3, true)
         ON CONFLICT (legacy_id) DO UPDATE SET
+          generation_number = EXCLUDED.generation_number,
           percentage = EXCLUDED.percentage,
+          is_active = EXCLUDED.is_active,
           updated_at = NOW()`,
         [
           row.number_generation || row.id_generation,
@@ -123,9 +137,9 @@ module.exports = async function phase05(v1Pool, v2Pool) {
 
   // Calentar caché con mlm_ranks recién migrados
   await idResolver.warmUp(v2Pool, [
-    { type: 'mlm_rank', table: 'mlm_ranks', column: 'legacy_id' },
-    { type: 'sat_tax_regime', table: 'sat_tax_regimes', column: 'legacy_id' },
-    { type: 'commission_tax_regime', table: 'commission_tax_regimes', column: 'id' },
+    { type: 'mlm_rank', table: 'mlm_ranks' },
+    { type: 'sat_tax_regime', table: 'sat_tax_regimes' },
+    { type: 'commission_tax_regime', table: 'commission_tax_regimes' },
   ]);
 
   // --- customers (218K registros) — PASO 1: sin self-refs ---
@@ -165,14 +179,12 @@ module.exports = async function phase05(v1Pool, v2Pool) {
         commissionTaxRegimeId = commTaxMap[row.tax_regime_customers] || null;
       }
 
-      // Upload customer documents to GCS (runs 5 uploads concurrently, skips NULLs)
-      const [photoUrl, contractUrl, ineUrl, bankStatementUrl, taxIdUrl] = await uploadMultiple([
-        { rawPath: row.file_photo_customers,   gcsFolder: `customers/${row.id_customers}/photo` },
-        { rawPath: row.file_contract,          gcsFolder: `customers/${row.id_customers}/contract` },
-        { rawPath: row.file_ine,              gcsFolder: `customers/${row.id_customers}/ine` },
-        { rawPath: row.file_cuenta_bancaria,   gcsFolder: `customers/${row.id_customers}/bank-statement` },
-        { rawPath: row.file_constancia_fiscal, gcsFolder: `customers/${row.id_customers}/tax-id` },
-      ]);
+      // Store legacy URLs — GCS upload deferred to phase 14
+      const photoUrl = prefixUrl(row.file_photo_customers);
+      const contractUrl = prefixUrl(row.file_contract);
+      const ineUrl = prefixUrl(row.file_ine);
+      const bankStatementUrl = prefixUrl(row.file_cuenta_bancaria);
+      const taxIdUrl = prefixUrl(row.file_constancia_fiscal);
 
       await client.query(
         `INSERT INTO tonic.customers (
@@ -215,11 +227,51 @@ module.exports = async function phase05(v1Pool, v2Pool) {
           $44
         )
         ON CONFLICT (legacy_id) DO UPDATE SET
+          customer_number = EXCLUDED.customer_number,
           first_name = EXCLUDED.first_name,
           last_name = EXCLUDED.last_name,
-          status = EXCLUDED.status,
+          mothers_last_name = EXCLUDED.mothers_last_name,
+          email = EXCLUDED.email,
+          phone = EXCLUDED.phone,
+          date_of_birth = EXCLUDED.date_of_birth,
+          curp = EXCLUDED.curp,
+          rfc = EXCLUDED.rfc,
+          ine_number = EXCLUDED.ine_number,
+          nss = EXCLUDED.nss,
           rank_id = EXCLUDED.rank_id,
           current_rank_id = EXCLUDED.current_rank_id,
+          customer_type = EXCLUDED.customer_type,
+          status = EXCLUDED.status,
+          kit_type = EXCLUDED.kit_type,
+          branch_id = EXCLUDED.branch_id,
+          price_type_id = EXCLUDED.price_type_id,
+          country_id = EXCLUDED.country_id,
+          sat_tax_regime_id = EXCLUDED.sat_tax_regime_id,
+          commission_tax_regime_id = EXCLUDED.commission_tax_regime_id,
+          cfdi_use_code = EXCLUDED.cfdi_use_code,
+          language_code = EXCLUDED.language_code,
+          registration_date = EXCLUDED.registration_date,
+          last_purchase_date = EXCLUDED.last_purchase_date,
+          average_monthly_purchase = EXCLUDED.average_monthly_purchase,
+          photo_url = EXCLUDED.photo_url,
+          contract_url = EXCLUDED.contract_url,
+          ine_document_url = EXCLUDED.ine_document_url,
+          bank_statement_url = EXCLUDED.bank_statement_url,
+          tax_id_document_url = EXCLUDED.tax_id_document_url,
+          documents_validated = EXCLUDED.documents_validated,
+          terms_accepted = EXCLUDED.terms_accepted,
+          terms_accepted_at = EXCLUDED.terms_accepted_at,
+          is_online_registration = EXCLUDED.is_online_registration,
+          membership_paid = EXCLUDED.membership_paid,
+          moved_roll_over = EXCLUDED.moved_roll_over,
+          discount_two_periods = EXCLUDED.discount_two_periods,
+          payroll_tax_regime_code = EXCLUDED.payroll_tax_regime_code,
+          payroll_cfdi_use_code = EXCLUDED.payroll_cfdi_use_code,
+          payroll_curp = EXCLUDED.payroll_curp,
+          payroll_rfc = EXCLUDED.payroll_rfc,
+          payroll_zip_code = EXCLUDED.payroll_zip_code,
+          payment_form_code = EXCLUDED.payment_form_code,
+          is_active = EXCLUDED.is_active,
           updated_at = NOW()`,
         [
           row.id_customers,                                         // $1 legacy_id

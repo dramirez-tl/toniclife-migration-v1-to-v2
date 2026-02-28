@@ -30,9 +30,12 @@ module.exports = async function phase10(v1Pool, v2Pool) {
           id, count_number, branch_id, count_type, planned_date, status, notes, is_active
         ) VALUES (gen_random_uuid(), $1, $2, 'full', $3, 'approved', $4, true)
         ON CONFLICT (count_number) DO UPDATE SET
+          branch_id = EXCLUDED.branch_id,
           planned_date = EXCLUDED.planned_date,
           count_type = EXCLUDED.count_type,
           status = EXCLUDED.status,
+          notes = EXCLUDED.notes,
+          is_active = EXCLUDED.is_active,
           updated_at = NOW()
         RETURNING id`,
         [

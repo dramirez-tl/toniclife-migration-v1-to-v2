@@ -13,28 +13,20 @@ module.exports = async function phase01(v1Pool, v2Pool) {
     sourceQuery: 'SELECT * FROM toniclife.t_country ORDER BY id_country',
     tableName: 'countries',
     transformAndInsert: async (row, client) => {
+      const code = (row.code_country || row.abr_country || 'XX').substring(0, 2).toUpperCase();
       const { rows } = await client.query(
         `INSERT INTO tonic.countries (id, code, name, phone_code, is_active)
          VALUES (gen_random_uuid(), $1, $2, $3, true)
-         ON CONFLICT (code) DO NOTHING
+         ON CONFLICT (code) DO UPDATE SET
+           name = EXCLUDED.name,
+           phone_code = EXCLUDED.phone_code,
+           is_active = EXCLUDED.is_active,
+           updated_at = NOW()
          RETURNING id`,
-        [
-          (row.code_country || row.abr_country || 'XX').substring(0, 2).toUpperCase(),
-          row.name_country || 'Sin nombre',
-          row.phone_code_country || null,
-        ]
+        [code, row.name_country || 'Sin nombre', row.phone_code_country || null]
       );
       if (rows.length > 0) {
         await idResolver.registerMapping(v2Pool, 'country', row.id_country, rows[0].id, 't_country');
-      } else {
-        // Ya existía, buscar el id
-        const existing = await client.query(
-          `SELECT id FROM tonic.countries WHERE code = $1`,
-          [(row.code_country || row.abr_country || 'XX').substring(0, 2).toUpperCase()]
-        );
-        if (existing.rows.length > 0) {
-          await idResolver.registerMapping(v2Pool, 'country', row.id_country, existing.rows[0].id, 't_country');
-        }
       }
     },
   }));
@@ -50,17 +42,16 @@ module.exports = async function phase01(v1Pool, v2Pool) {
       const { rows } = await client.query(
         `INSERT INTO tonic.currencies (id, code, name, symbol, is_active)
          VALUES (gen_random_uuid(), $1, $2, $3, true)
-         ON CONFLICT (code) DO NOTHING
+         ON CONFLICT (code) DO UPDATE SET
+           name = EXCLUDED.name,
+           symbol = EXCLUDED.symbol,
+           is_active = EXCLUDED.is_active,
+           updated_at = NOW()
          RETURNING id`,
         [code, row.name_type_money || code, row.symbol_type_money || '$']
       );
       if (rows.length > 0) {
         await idResolver.registerMapping(v2Pool, 'currency', row.id_type_money, rows[0].id, 't_type_money');
-      } else {
-        const existing = await client.query(`SELECT id FROM tonic.currencies WHERE code = $1`, [code]);
-        if (existing.rows.length > 0) {
-          await idResolver.registerMapping(v2Pool, 'currency', row.id_type_money, existing.rows[0].id, 't_type_money');
-        }
       }
     },
   }));
@@ -76,17 +67,15 @@ module.exports = async function phase01(v1Pool, v2Pool) {
       const { rows } = await client.query(
         `INSERT INTO tonic.price_types (id, code, name, is_active)
          VALUES (gen_random_uuid(), $1, $2, true)
-         ON CONFLICT (code) DO NOTHING
+         ON CONFLICT (code) DO UPDATE SET
+           name = EXCLUDED.name,
+           is_active = EXCLUDED.is_active,
+           updated_at = NOW()
          RETURNING id`,
         [code, row.name_type_price || code]
       );
       if (rows.length > 0) {
         await idResolver.registerMapping(v2Pool, 'price_type', row.id_type_price, rows[0].id, 't_type_price');
-      } else {
-        const existing = await client.query(`SELECT id FROM tonic.price_types WHERE code = $1`, [code]);
-        if (existing.rows.length > 0) {
-          await idResolver.registerMapping(v2Pool, 'price_type', row.id_type_price, existing.rows[0].id, 't_type_price');
-        }
       }
     },
   }));
@@ -102,7 +91,12 @@ module.exports = async function phase01(v1Pool, v2Pool) {
       await client.query(
         `INSERT INTO tonic.document_types (id, code, name, category, legacy_id, is_active)
          VALUES (gen_random_uuid(), $1, $2, 'sales', $3, true)
-         ON CONFLICT (legacy_id) DO UPDATE SET name = EXCLUDED.name`,
+         ON CONFLICT (legacy_id) DO UPDATE SET
+           code = EXCLUDED.code,
+           name = EXCLUDED.name,
+           category = EXCLUDED.category,
+           is_active = EXCLUDED.is_active,
+           updated_at = NOW()`,
         [code, row.name_type_document || code, row.id_type_document]
       );
     },
@@ -130,17 +124,16 @@ module.exports = async function phase01(v1Pool, v2Pool) {
       const { rows } = await client.query(
         `INSERT INTO tonic.payment_methods (id, code, name, payment_type, is_active)
          VALUES (gen_random_uuid(), $1, $2, $3, true)
-         ON CONFLICT (code) DO NOTHING
+         ON CONFLICT (code) DO UPDATE SET
+           name = EXCLUDED.name,
+           payment_type = EXCLUDED.payment_type,
+           is_active = EXCLUDED.is_active,
+           updated_at = NOW()
          RETURNING id`,
         [code, name, paymentType]
       );
       if (rows.length > 0) {
         await idResolver.registerMapping(v2Pool, 'payment_method', row.id_type_format_pay, rows[0].id, 't_type_format_pay');
-      } else {
-        const existing = await client.query(`SELECT id FROM tonic.payment_methods WHERE code = $1`, [code]);
-        if (existing.rows.length > 0) {
-          await idResolver.registerMapping(v2Pool, 'payment_method', row.id_type_format_pay, existing.rows[0].id, 't_type_format_pay');
-        }
       }
     },
   }));
@@ -157,17 +150,17 @@ module.exports = async function phase01(v1Pool, v2Pool) {
       const { rows } = await client.query(
         `INSERT INTO tonic.tax_rules (id, code, name, tax_type, rate, is_active)
          VALUES (gen_random_uuid(), $1, $2, 'iva', $3, true)
-         ON CONFLICT (code) DO NOTHING
+         ON CONFLICT (code) DO UPDATE SET
+           name = EXCLUDED.name,
+           tax_type = EXCLUDED.tax_type,
+           rate = EXCLUDED.rate,
+           is_active = EXCLUDED.is_active,
+           updated_at = NOW()
          RETURNING id`,
         [code, row.name_tax || code, rate]
       );
       if (rows.length > 0) {
         await idResolver.registerMapping(v2Pool, 'tax_rule', row.id_tax, rows[0].id, 't_tax');
-      } else {
-        const existing = await client.query(`SELECT id FROM tonic.tax_rules WHERE code = $1`, [code]);
-        if (existing.rows.length > 0) {
-          await idResolver.registerMapping(v2Pool, 'tax_rule', row.id_tax, existing.rows[0].id, 't_tax');
-        }
       }
     },
   }));
@@ -183,7 +176,11 @@ module.exports = async function phase01(v1Pool, v2Pool) {
       await client.query(
         `INSERT INTO tonic.dispatch_types (id, code, name, legacy_id, is_active)
          VALUES (gen_random_uuid(), $1, $2, $3, true)
-         ON CONFLICT (legacy_id) DO UPDATE SET name = EXCLUDED.name`,
+         ON CONFLICT (legacy_id) DO UPDATE SET
+           code = EXCLUDED.code,
+           name = EXCLUDED.name,
+           is_active = EXCLUDED.is_active,
+           updated_at = NOW()`,
         [code, row.name_dispatch || code, row.id_dispatch]
       );
     },
@@ -223,7 +220,11 @@ module.exports = async function phase01(v1Pool, v2Pool) {
       await client.query(
         `INSERT INTO tonic.sat_cfdi_uses (id, code, name, legacy_id, is_active)
          VALUES (gen_random_uuid(), $1, $2, $3, true)
-         ON CONFLICT (legacy_id) DO UPDATE SET name = EXCLUDED.name`,
+         ON CONFLICT (legacy_id) DO UPDATE SET
+           code = EXCLUDED.code,
+           name = EXCLUDED.name,
+           is_active = EXCLUDED.is_active,
+           updated_at = NOW()`,
         [code, row.name_cfdi || code, code]
       );
     },
@@ -240,7 +241,12 @@ module.exports = async function phase01(v1Pool, v2Pool) {
       await client.query(
         `INSERT INTO tonic.sat_tax_regimes (id, code, name, applies_to, legacy_id, is_active)
          VALUES (gen_random_uuid(), $1, $2, 'both', $3, true)
-         ON CONFLICT (legacy_id) DO UPDATE SET name = EXCLUDED.name`,
+         ON CONFLICT (legacy_id) DO UPDATE SET
+           code = EXCLUDED.code,
+           name = EXCLUDED.name,
+           applies_to = EXCLUDED.applies_to,
+           is_active = EXCLUDED.is_active,
+           updated_at = NOW()`,
         [code, row.name_regimen || code, row.id_regimen]
       );
     },

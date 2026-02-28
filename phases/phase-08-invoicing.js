@@ -2,12 +2,19 @@ const logger = require('../utils/logger');
 const idResolver = require('../utils/id-resolver');
 const { processWithCursor, getCount } = require('../utils/batch-processor');
 const { cleanString, cleanTrunc, toDecimal } = require('../utils/validators');
-const { uploadFile } = require('../utils/gcs-uploader');
+const { prefixUrl } = require('../utils/validators');
 const config = require('../config');
 
 module.exports = async function phase08(v1Pool, v2Pool) {
   logger.phase('08', 'Facturación');
   const allResults = [];
+
+  // Pre-calentar caché
+  await idResolver.warmUp(v2Pool, [
+    { type: 'customer', table: 'customers' },
+    { type: 'branch', table: 'branches' },
+    { type: 'product', table: 'products' },
+  ]);
 
   // Obtener provider_id de Facturama
   const providerResult = await v2Pool.query(
@@ -41,10 +48,9 @@ module.exports = async function phase08(v1Pool, v2Pool) {
       if (!branchId) return 'skipped';
 
       const invoiceNumber = `FAC-${row.id_factura_libre}`;
-      const xmlFilePath = await uploadFile(
-        row.name_path && !String(row.name_path).includes('/') ? `files/facturama/${row.name_path}` : row.name_path,
-        `invoices/xml/${row.id_factura_libre}`
-      );
+      const rawPath = row.name_path && !String(row.name_path).includes('/')
+        ? `files/facturama/${row.name_path}` : row.name_path;
+      const xmlFilePath = prefixUrl(rawPath);
 
       await client.query(
         `INSERT INTO tonic.invoices (
@@ -67,7 +73,25 @@ module.exports = async function phase08(v1Pool, v2Pool) {
           true
         )
         ON CONFLICT (legacy_id) DO UPDATE SET
+          invoice_number = EXCLUDED.invoice_number,
+          invoice_type = EXCLUDED.invoice_type,
+          customer_id = EXCLUDED.customer_id,
+          branch_id = EXCLUDED.branch_id,
+          provider_id = EXCLUDED.provider_id,
+          receiver_name = EXCLUDED.receiver_name,
+          receiver_rfc = EXCLUDED.receiver_rfc,
+          receiver_cfdi_use_code = EXCLUDED.receiver_cfdi_use_code,
+          payment_method_code = EXCLUDED.payment_method_code,
+          payment_form_code = EXCLUDED.payment_form_code,
+          subtotal = EXCLUDED.subtotal,
+          tax_amount = EXCLUDED.tax_amount,
+          total = EXCLUDED.total,
+          sat_uuid = EXCLUDED.sat_uuid,
+          xml_file_path = EXCLUDED.xml_file_path,
+          pdf_file_path = EXCLUDED.pdf_file_path,
           provider_status = EXCLUDED.provider_status,
+          stamped_at = EXCLUDED.stamped_at,
+          is_active = EXCLUDED.is_active,
           updated_at = NOW()`,
         [
           invoiceNumber,                                            // $1
@@ -84,7 +108,7 @@ module.exports = async function phase08(v1Pool, v2Pool) {
           toDecimal(row.iva, 0),                                    // $12
           toDecimal(row.total, 0),                                  // $13
           cleanString(row.facturama_id),                            // $14
-          xmlFilePath,                                                  // $15 — xml a GCS o prefixUrl fallback
+          xmlFilePath,                                              // $15
           null,                                                     // $16 pdf_file_path no existe en v1
           row.facturama_id ? 'stamped' : 'pending',                 // $17
           row.created_at || null,                                   // $18
@@ -126,15 +150,24 @@ module.exports = async function phase08(v1Pool, v2Pool) {
           gen_random_uuid(), $1, $2, $3,
           $4, $5, $6, $7, $8, true
         )
-        ON CONFLICT (legacy_id) DO NOTHING`,
+        ON CONFLICT (legacy_id) DO UPDATE SET
+          invoice_id = EXCLUDED.invoice_id,
+          product_id = EXCLUDED.product_id,
+          description = EXCLUDED.description,
+          quantity = EXCLUDED.quantity,
+          unit_price = EXCLUDED.unit_price,
+          subtotal = EXCLUDED.subtotal,
+          total = EXCLUDED.total,
+          is_active = EXCLUDED.is_active,
+          updated_at = NOW()`,
         [
           invoiceResult.rows[0].id,
           productId,
-          'Producto migrado',                                       // description — NOT NULL in v2, no description in v1
-          qty,                                                      // quantity
-          price,                                                    // unit_price
-          total,                                                    // subtotal = qty * price (no discount)
-          total,                                                    // total = qty * price
+          'Producto migrado',
+          qty,
+          price,
+          total,
+          total,
           row.id_factura_libre_det,
         ]
       );
@@ -158,11 +191,10 @@ module.exports = async function phase08(v1Pool, v2Pool) {
     batchSize: config.migration.batchSize,
     transformAndInsert: async (row, client) => {
       const customerId = await idResolver.resolve(v2Pool, 'customer', row.id_customers, 'customers');
-      const branchId = await idResolver.resolve(v2Pool, 'branch', 1); // default branch
+      const branchId = await idResolver.resolve(v2Pool, 'branch', 1);
 
-      // Usar un legacy_id offset para evitar colisión con t_factura_libre
       const legacyId = Number(row.id_bono_factura) + 10000000;
-      const xmlFilePath = await uploadFile(row.path_file, `invoices/xml/bono-${row.id_bono_factura}`);
+      const xmlFilePath = prefixUrl(row.path_file);
 
       await client.query(
         `INSERT INTO tonic.invoices (
@@ -180,22 +212,38 @@ module.exports = async function phase08(v1Pool, v2Pool) {
           $11, $12, $13,
           $14, true
         )
-        ON CONFLICT (legacy_id) DO NOTHING`,
+        ON CONFLICT (legacy_id) DO UPDATE SET
+          invoice_number = EXCLUDED.invoice_number,
+          invoice_type = EXCLUDED.invoice_type,
+          customer_id = EXCLUDED.customer_id,
+          branch_id = EXCLUDED.branch_id,
+          provider_id = EXCLUDED.provider_id,
+          receiver_name = EXCLUDED.receiver_name,
+          receiver_rfc = EXCLUDED.receiver_rfc,
+          subtotal = EXCLUDED.subtotal,
+          tax_amount = EXCLUDED.tax_amount,
+          total = EXCLUDED.total,
+          sat_uuid = EXCLUDED.sat_uuid,
+          xml_file_path = EXCLUDED.xml_file_path,
+          pdf_file_path = EXCLUDED.pdf_file_path,
+          provider_status = EXCLUDED.provider_status,
+          is_active = EXCLUDED.is_active,
+          updated_at = NOW()`,
         [
           `BONO-${row.id_bono_factura}`,
           legacyId,
           customerId,
           branchId,
           providerId,
-          'Comisión',                                               // receiver_name - no existe razon_social en v1
-          null,                                                     // receiver_rfc - no existe rfc en v1
+          'Comisión',
+          null,
           toDecimal(row.subtotal, 0),
-          toDecimal(row.isr, 0),                                    // tax_amount ← isr
+          toDecimal(row.isr, 0),
           toDecimal(row.total, 0),
-          cleanString(row.facturama_id),                            // sat_uuid
-          xmlFilePath,                                                  // xml_file_path ← path_file → GCS
-          null,                                                     // pdf_file_path - no existe en v1
-          row.facturama_id ? 'stamped' : 'pending',                 // provider_status
+          cleanString(row.facturama_id),
+          xmlFilePath,
+          null,
+          row.facturama_id ? 'stamped' : 'pending',
         ]
       );
     },
@@ -236,20 +284,34 @@ module.exports = async function phase08(v1Pool, v2Pool) {
           $8, $9, $10,
           $11, $12, true
         )
-        ON CONFLICT (legacy_id) DO NOTHING`,
+        ON CONFLICT (legacy_id) DO UPDATE SET
+          invoice_number = EXCLUDED.invoice_number,
+          invoice_type = EXCLUDED.invoice_type,
+          customer_id = EXCLUDED.customer_id,
+          branch_id = EXCLUDED.branch_id,
+          provider_id = EXCLUDED.provider_id,
+          receiver_name = EXCLUDED.receiver_name,
+          receiver_rfc = EXCLUDED.receiver_rfc,
+          subtotal = EXCLUDED.subtotal,
+          tax_amount = EXCLUDED.tax_amount,
+          total = EXCLUDED.total,
+          sat_uuid = EXCLUDED.sat_uuid,
+          provider_status = EXCLUDED.provider_status,
+          is_active = EXCLUDED.is_active,
+          updated_at = NOW()`,
         [
           `CEDEA-${row.id_bono_cedea_factura}`,
           legacyId,
           customerId,
           branchId,
           providerId,
-          'CEDEA',                                                  // receiver_name - no existe razon_social en v1
-          null,                                                     // receiver_rfc - no existe rfc en v1
-          toDecimal(row.subtotal_changed, 0),                       // subtotal ← subtotal_changed
-          toDecimal(row.isr_changed, 0),                            // tax_amount ← isr_changed
-          toDecimal(row.total_changed, 0),                          // total ← total_changed
-          cleanString(row.facturama_id),                            // sat_uuid
-          row.facturama_id ? 'stamped' : 'pending',                 // provider_status
+          'CEDEA',
+          null,
+          toDecimal(row.subtotal_changed, 0),
+          toDecimal(row.isr_changed, 0),
+          toDecimal(row.total_changed, 0),
+          cleanString(row.facturama_id),
+          row.facturama_id ? 'stamped' : 'pending',
         ]
       );
     },
