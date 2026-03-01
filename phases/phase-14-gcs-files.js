@@ -50,6 +50,7 @@ const FILE_TABLES = [
 ];
 
 const LEGACY_URL_PREFIX = 'https://tonic-life.net';
+const GCS_URL_PREFIX = `https://storage.googleapis.com/`;
 
 module.exports = async function phase14(v1Pool, v2Pool) {
   logger.phase('14', 'Migración de Archivos a GCS');
@@ -67,14 +68,14 @@ module.exports = async function phase14(v1Pool, v2Pool) {
     for (const colDef of tableDef.columns) {
       logger.table(tableDef.name, `Migrando ${colDef.source} a GCS`);
 
-      // Find rows with legacy URLs that haven't been migrated to GCS yet
+      // Find rows that haven't been migrated to GCS yet (covers legacy URLs and relative paths)
       const idCols = 'id' + (tableDef.table === 'tonic.product_images' ? '' : ', legacy_id');
       const { rows } = await v2Pool.query(
         `SELECT ${idCols}, ${colDef.source}
          FROM ${tableDef.table}
          WHERE ${colDef.source} IS NOT NULL
-           AND ${colDef.source} LIKE $1`,
-        [`${LEGACY_URL_PREFIX}%`]
+           AND ${colDef.source} != ''
+           AND ${colDef.source} NOT LIKE 'https://storage.googleapis.com/%'`
       );
 
       logger.info(`    ${tableDef.name}.${colDef.source}: ${rows.length} archivos por migrar`);
@@ -84,22 +85,32 @@ module.exports = async function phase14(v1Pool, v2Pool) {
         const row = rows[i];
         try {
           const url = row[colDef.source];
-          // Extract the relative path from the legacy URL
-          // e.g. "https://tonic-life.net/assets/files/photo.jpg" → "files/photo.jpg"
-          let relativePath = url;
+          // Extract the relative path from the URL
+          let relativePath;
           if (url.startsWith(LEGACY_URL_PREFIX)) {
+            // Full legacy URL: "https://tonic-life.net/assets/files/photo.jpg" → "files/photo.jpg"
             relativePath = url.substring(LEGACY_URL_PREFIX.length);
-            // Remove leading /assets/ or / prefix
             relativePath = relativePath.replace(/^\/assets\//, '').replace(/^\//, '');
+          } else if (url.startsWith('/')) {
+            // Relative URL without domain: "/images/products/foto.jpg" → "images/products/foto.jpg"
+            relativePath = url.replace(/^\//, '');
+          } else {
+            // Already a relative path
+            relativePath = url;
           }
 
           const gcsFolder = colDef.gcsFolder(row);
           const gcsPath = await uploadFile(relativePath, gcsFolder);
 
-          if (gcsPath && !gcsPath.startsWith('http')) {
+          if (gcsPath) {
+            // Build full public GCS URL if it's a relative GCS path
+            let finalUrl = gcsPath;
+            if (!gcsPath.startsWith('http')) {
+              finalUrl = `https://storage.googleapis.com/${config.gcs.bucketName}/${gcsPath}`;
+            }
             await v2Pool.query(
               `UPDATE ${tableDef.table} SET ${colDef.source} = $1, updated_at = NOW() WHERE id = $2`,
-              [gcsPath, row.id]
+              [finalUrl, row.id]
             );
             results.migrated++;
           } else {
