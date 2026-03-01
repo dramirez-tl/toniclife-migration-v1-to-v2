@@ -15,9 +15,9 @@ Opciones:
   --help, -h              Mostrar esta ayuda
 
 Fases: 0(Infra), 1(Catálogos), 2(Sucursales), 3(Seguridad), 3b(Fix Passwords),
-       4(Productos), 5(Clientes), 6(Red MLM), 7(Ventas), 8(Facturación),
-       9(Comisiones), 10(Inventario), 10b(Proveedores), 11(RRHH),
-       12(Comunicación), 13(Auditoría), 99(Post-Migración)
+       4(Productos), 5(Clientes), 6(Red MLM), 7(Ventas), 7b(Tipos Orden),
+       8(Facturación), 9(Comisiones), 10(Inventario), 10b(Proveedores),
+       11(RRHH), 12(Comunicación), 13(Auditoría), 99(Post-Migración)
 
 Requiere .env con credenciales. Copia .env.example como plantilla.
 `);
@@ -42,6 +42,7 @@ const PHASES = {
   5:   { name: 'Clientes/Distribuidores',    module: './phases/phase-05-customers' },
   6:   { name: 'Red MLM',                    module: './phases/phase-06-network' },
   7:   { name: 'Ventas y Documentos',        module: './phases/phase-07-sales' },
+  '7b': { name: 'Tipos de Orden/Ecommerce', module: './phases/phase-07b-order-types' },
   8:   { name: 'Facturación',                module: './phases/phase-08-invoicing' },
   9:   { name: 'Comisiones',                 module: './phases/phase-09-commissions' },
   10:  { name: 'Inventario',                 module: './phases/phase-10-inventory' },
@@ -54,7 +55,7 @@ const PHASES = {
 };
 
 // Orden de ejecución por defecto (todas las fases)
-const DEFAULT_ORDER = [0, 1, 2, 3, '3b', 4, 5, 6, 7, 8, 9, 10, '10b', 11, 12, 13, 14, 99];
+const DEFAULT_ORDER = [0, 1, 2, 3, '3b', 4, 5, 6, 7, '7b', 8, 9, 10, '10b', 11, 12, 13, 14, 99];
 
 // =============================================
 // Parseo de argumentos
@@ -73,7 +74,7 @@ function parseArgs() {
     if (arg === '--phase' || arg === '-p') {
       const val = args[++i];
       if (val !== undefined) {
-        const phaseKey = (val === '10b' || val === '3b') ? val : Number(val);
+        const phaseKey = (val === '10b' || val === '3b' || val === '7b') ? val : Number(val);
         if (PHASES[phaseKey]) {
           options.phases.push(phaseKey);
         } else {
