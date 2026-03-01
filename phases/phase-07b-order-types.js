@@ -51,7 +51,7 @@ module.exports = async function phase07b(v1Pool, v2Pool) {
     `);
 
     // Cargar datos de v1 en chunks
-    const CHUNK = 50000;
+    const CHUNK = 10000;
     let offset = 0;
     let total = 0;
     logger.info('  Cargando tipos de documento desde v1...');
