@@ -16,7 +16,7 @@ Opciones:
 
 Fases: 0(Infra), 1(Catálogos), 2(Sucursales), 3(Seguridad), 3b(Fix Passwords),
        4(Productos), 4b(Fix Precios), 4c(Fix USD), 4d(Fix Frontera),
-       4e(Fix Guatemala), 5(Clientes), 6(Red MLM), 7(Ventas),
+       4e(Fix Guatemala), 4f(Fix Colombia), 5(Clientes), 6(Red MLM), 7(Ventas),
        7b(Tipos Orden), 8(Facturación), 9(Comisiones), 10(Inventario),
        10b(Proveedores), 11(RRHH), 12(Comunicación), 13(Auditoría),
        99(Post-Migración)
@@ -45,6 +45,7 @@ const PHASES = {
   '4c': { name: 'Fix Precios USD',          module: './phases/phase-04c-fix-prices-usd' },
   '4d': { name: 'Fix Precios Frontera',     module: './phases/phase-04d-fix-prices-frontera' },
   '4e': { name: 'Fix Precios Guatemala',    module: './phases/phase-04e-fix-prices-guatemala' },
+  '4f': { name: 'Fix Precios Colombia',     module: './phases/phase-04f-fix-prices-colombia' },
   5:   { name: 'Clientes/Distribuidores',    module: './phases/phase-05-customers' },
   6:   { name: 'Red MLM',                    module: './phases/phase-06-network' },
   7:   { name: 'Ventas y Documentos',        module: './phases/phase-07-sales' },
@@ -61,7 +62,7 @@ const PHASES = {
 };
 
 // Orden de ejecución por defecto (todas las fases)
-const DEFAULT_ORDER = [0, 1, 2, 3, '3b', 4, '4b', '4c', '4d', '4e', 5, 6, 7, '7b', 8, 9, 10, '10b', 11, 12, 13, 14, 99];
+const DEFAULT_ORDER = [0, 1, 2, 3, '3b', 4, '4b', '4c', '4d', '4e', '4f', 5, 6, 7, '7b', 8, 9, 10, '10b', 11, 12, 13, 14, 99];
 
 // =============================================
 // Parseo de argumentos
@@ -80,7 +81,7 @@ function parseArgs() {
     if (arg === '--phase' || arg === '-p') {
       const val = args[++i];
       if (val !== undefined) {
-        const phaseKey = (val === '10b' || val === '3b' || val === '4b' || val === '4c' || val === '4d' || val === '4e' || val === '7b') ? val : Number(val);
+        const phaseKey = (val === '10b' || val === '3b' || val === '4b' || val === '4c' || val === '4d' || val === '4e' || val === '4f' || val === '7b') ? val : Number(val);
         if (PHASES[phaseKey]) {
           options.phases.push(phaseKey);
         } else {
