@@ -28,7 +28,15 @@ module.exports = async function phase04c(v1Pool, v2Pool) {
     return { migrated: 0, skipped: 0, failed: 0, errors: [] };
   }
 
-  // Paso 2: Resolver UUIDs de price_types
+  // Paso 2: Resolver country_id de USA y UUIDs de price_types
+  const { rows: countryRows } = await v2Pool.query("SELECT id FROM tonic.countries WHERE code = 'US'");
+  if (countryRows.length === 0) {
+    logger.error('  No se encontró country con code=US en v2');
+    return { migrated: 0, skipped: 0, failed: 1, errors: [{ error: 'Country US not found' }] };
+  }
+  const usaCountryId = countryRows[0].id;
+  logger.info(`    Country US id: ${usaCountryId}`);
+
   const { rows: ptRows } = await v2Pool.query('SELECT id, code FROM tonic.price_types');
   const ptUuidMap = {};
   for (const row of ptRows) {
@@ -87,9 +95,9 @@ module.exports = async function phase04c(v1Pool, v2Pool) {
       JOIN tonic.price_types pt ON pt.code = t.price_type_code
       WHERE pp.product_id = p.id
         AND pp.price_type_id = pt.id
-        AND pp.currency_code = 'USD'
+        AND pp.country_id = $1
         AND (pp.price != t.price OR pp.points != t.points OR pp.business_value != t.business_value)
-    `);
+    `, [usaCountryId]);
     totalUpdated = result.rowCount;
     logger.info(`    ${totalUpdated} precios USD actualizados`);
 
@@ -104,9 +112,9 @@ module.exports = async function phase04c(v1Pool, v2Pool) {
 
   // Paso 4: Verificación
   logger.info('  Verificación:');
-  const verify1 = await v2Pool.query("SELECT COUNT(*) AS cnt FROM tonic.product_prices WHERE currency_code = 'USD' AND price > 0");
-  const verify2 = await v2Pool.query("SELECT COUNT(*) AS cnt FROM tonic.product_prices WHERE currency_code = 'USD' AND points > 0");
-  const verify3 = await v2Pool.query("SELECT COUNT(*) AS cnt FROM tonic.product_prices WHERE currency_code = 'USD' AND business_value > 0");
+  const verify1 = await v2Pool.query("SELECT COUNT(*) AS cnt FROM tonic.product_prices WHERE country_id = $1 AND price > 0", [usaCountryId]);
+  const verify2 = await v2Pool.query("SELECT COUNT(*) AS cnt FROM tonic.product_prices WHERE country_id = $1 AND points > 0", [usaCountryId]);
+  const verify3 = await v2Pool.query("SELECT COUNT(*) AS cnt FROM tonic.product_prices WHERE country_id = $1 AND business_value > 0", [usaCountryId]);
   logger.info(`    USD con price > 0: ${verify1.rows[0].cnt}`);
   logger.info(`    USD con points > 0: ${verify2.rows[0].cnt}`);
   logger.info(`    USD con business_value > 0: ${verify3.rows[0].cnt}`);
@@ -117,10 +125,10 @@ module.exports = async function phase04c(v1Pool, v2Pool) {
     FROM tonic.product_prices pp
     JOIN tonic.price_types pt ON pt.id = pp.price_type_id
     JOIN tonic.products p ON p.id = pp.product_id
-    WHERE pp.currency_code = 'USD' AND pp.price > 0
+    WHERE pp.country_id = $1 AND pp.price > 0
     ORDER BY p.code, pt.code
     LIMIT 6
-  `);
+  `, [usaCountryId]);
   if (verify4.rows.length > 0) {
     logger.info('  Muestra precios USD actualizados:');
     for (const row of verify4.rows) {
