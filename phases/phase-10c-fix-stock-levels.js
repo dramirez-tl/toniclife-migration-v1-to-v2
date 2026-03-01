@@ -71,14 +71,13 @@ module.exports = async function phase10c(v1Pool, v2Pool) {
     }
     logger.info(`    ${skipped} registros omitidos (producto o sucursal no encontrados en v2)`);
 
-    // UPSERT: INSERT o UPDATE si ya existe
+    // UPSERT: INSERT o UPDATE si ya existe (quantity_available es GENERATED ALWAYS)
     const result = await v2Client.query(`
-      INSERT INTO tonic.stock_levels (id, product_id, branch_id, quantity_on_hand, quantity_available, quantity_reserved, quantity_in_transit, last_movement_at)
-      SELECT gen_random_uuid(), t.product_id, t.branch_id, t.qty, t.qty, 0, 0, NOW()
+      INSERT INTO tonic.stock_levels (id, product_id, branch_id, quantity_on_hand, quantity_reserved, quantity_in_transit, last_movement_at)
+      SELECT gen_random_uuid(), t.product_id, t.branch_id, t.qty, 0, 0, NOW()
       FROM tmp_stock t
       ON CONFLICT (product_id, branch_id) DO UPDATE SET
         quantity_on_hand = EXCLUDED.quantity_on_hand,
-        quantity_available = EXCLUDED.quantity_available,
         last_movement_at = NOW()
     `);
     totalUpserted = result.rowCount;
