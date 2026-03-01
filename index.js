@@ -18,7 +18,7 @@ Fases: 0(Infra), 1(Catálogos), 2(Sucursales), 3(Seguridad), 3b(Fix Passwords),
        4(Productos), 4b(Fix Precios), 4c(Fix USD), 4d(Fix Frontera),
        4e(Fix Guatemala), 4f(Fix Colombia), 5(Clientes), 6(Red MLM), 7(Ventas),
        7b(Tipos Orden), 8(Facturación), 9(Comisiones), 10(Inventario),
-       10b(Proveedores), 11(RRHH), 12(Comunicación), 13(Auditoría),
+       10b(Proveedores), 10c(Fix Stock), 11(RRHH), 12(Comunicación), 13(Auditoría),
        99(Post-Migración)
 
 Requiere .env con credenciales. Copia .env.example como plantilla.
@@ -54,6 +54,7 @@ const PHASES = {
   9:   { name: 'Comisiones',                 module: './phases/phase-09-commissions' },
   10:  { name: 'Inventario',                 module: './phases/phase-10-inventory' },
   '10b': { name: 'Proveedores',             module: './phases/phase-10b-suppliers' },
+  '10c': { name: 'Fix Stock Levels',        module: './phases/phase-10c-fix-stock-levels' },
   11:  { name: 'Recursos Humanos',           module: './phases/phase-11-hr' },
   12:  { name: 'Comunicación',               module: './phases/phase-12-communication' },
   13:  { name: 'Auditoría y Logs',           module: './phases/phase-13-audit' },
@@ -62,7 +63,7 @@ const PHASES = {
 };
 
 // Orden de ejecución por defecto (todas las fases)
-const DEFAULT_ORDER = [0, 1, 2, 3, '3b', 4, '4b', '4c', '4d', '4e', '4f', 5, 6, 7, '7b', 8, 9, 10, '10b', 11, 12, 13, 14, 99];
+const DEFAULT_ORDER = [0, 1, 2, 3, '3b', 4, '4b', '4c', '4d', '4e', '4f', 5, 6, 7, '7b', 8, 9, 10, '10b', '10c', 11, 12, 13, 14, 99];
 
 // =============================================
 // Parseo de argumentos
@@ -81,7 +82,7 @@ function parseArgs() {
     if (arg === '--phase' || arg === '-p') {
       const val = args[++i];
       if (val !== undefined) {
-        const phaseKey = (val === '10b' || val === '3b' || val === '4b' || val === '4c' || val === '4d' || val === '4e' || val === '4f' || val === '7b') ? val : Number(val);
+        const phaseKey = (val === '10b' || val === '10c' || val === '3b' || val === '4b' || val === '4c' || val === '4d' || val === '4e' || val === '4f' || val === '7b') ? val : Number(val);
         if (PHASES[phaseKey]) {
           options.phases.push(phaseKey);
         } else {
