@@ -60,8 +60,8 @@ module.exports = async function phase07b(v1Pool, v2Pool) {
       const { rows } = await v1Pool.query(`
         SELECT id_document, id_type_document,
                (id_payment_mercado_pago IS NOT NULL) AS has_mp,
-               (ecommerce_publico = 1) AS is_ecomm,
-               (anulado = 1 OR anulado = true) AS is_anul
+               (COALESCE(ecommerce_publico, 0) = 1) AS is_ecomm,
+               (COALESCE(anulado, 0) = 1) AS is_anul
         FROM toniclife.t_document
         ORDER BY id_document
         LIMIT ${CHUNK} OFFSET ${offset}
