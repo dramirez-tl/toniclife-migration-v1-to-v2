@@ -7,6 +7,9 @@ module.exports = async function phase14c(v1Pool, v2Pool) {
   const errors = [];
   const BUCKET_NAME = 'toniclife-prod';
   const BUCKET_PREFIX = `https://storage.googleapis.com/${BUCKET_NAME}/`;
+  const PREFIXES = ['products/', 'customers/', 'purchase-orders/'];
+  const DELETE_BATCH = 100;
+  const PAGE_SIZE = 1000;
 
   // Paso 1: Recolectar TODAS las URLs GCS referenciadas en la BD
   logger.info('  Paso 1: Recolectando URLs GCS referenciadas en BD...');
@@ -41,10 +44,8 @@ module.exports = async function phase14c(v1Pool, v2Pool) {
 
   logger.info(`    Total archivos únicos referenciados: ${referencedPaths.size}`);
 
-  // Paso 2: Listar TODOS los archivos del bucket
-  logger.info('  Paso 2: Listando archivos del bucket GCS...');
+  // Inicializar GCS
   const { Storage } = require('@google-cloud/storage');
-
   let storage;
   if (config.gcs.credentials) {
     const credentials = JSON.parse(config.gcs.credentials);
@@ -52,74 +53,103 @@ module.exports = async function phase14c(v1Pool, v2Pool) {
   } else {
     storage = new Storage({ projectId: config.gcs.projectId });
   }
-
   const bucket = storage.bucket(BUCKET_NAME);
 
-  let allFiles = [];
-  let query = {};
-  do {
-    const [files, nextQuery] = await bucket.getFiles(query);
-    allFiles = allFiles.concat(files);
-    if (allFiles.length % 10000 === 0) {
-      logger.info(`    Listados: ${allFiles.length.toLocaleString()} archivos...`);
-    }
-    query = nextQuery;
-  } while (query);
+  // Paso 2+3: Listar por prefijo y eliminar huérfanos sobre la marcha (sin acumular)
+  let totalListed = 0;
+  let totalKept = 0;
+  let totalDeleted = 0;
+  let totalDeleteFailed = 0;
 
-  logger.info(`    ${allFiles.length.toLocaleString()} archivos en bucket`);
+  for (const prefix of PREFIXES) {
+    logger.info(`  Procesando prefijo: ${prefix}`);
+    let prefixListed = 0;
+    let prefixKept = 0;
+    let prefixDeleted = 0;
+    let deleteQueue = [];
 
-  // Paso 3: Identificar y eliminar huérfanos
-  logger.info('  Paso 3: Identificando archivos huérfanos...');
-  const orphans = allFiles.filter(f => !referencedPaths.has(f.name));
-  const kept = allFiles.length - orphans.length;
-  logger.info(`    ${kept.toLocaleString()} archivos referenciados (se conservan)`);
-  logger.info(`    ${orphans.length.toLocaleString()} archivos huérfanos a eliminar`);
+    let query = { prefix, maxResults: PAGE_SIZE };
+    do {
+      const [files, nextQuery] = await bucket.getFiles(query);
+      prefixListed += files.length;
 
-  if (orphans.length === 0) {
-    logger.info('  No hay archivos huérfanos que eliminar.');
-    return { migrated: 0, skipped: kept, failed: 0, errors: [] };
-  }
-
-  let deleted = 0;
-  let deleteFailed = 0;
-  const BATCH = 100;
-  for (let i = 0; i < orphans.length; i += BATCH) {
-    const batch = orphans.slice(i, i + BATCH);
-    const results = await Promise.allSettled(batch.map(f => f.delete()));
-    for (const result of results) {
-      if (result.status === 'fulfilled') {
-        deleted++;
-      } else {
-        deleteFailed++;
-        if (deleteFailed <= 10) {
-          logger.warn(`    Error eliminando archivo: ${result.reason?.message || result.reason}`);
+      // Separar referenciados de huérfanos
+      for (const file of files) {
+        if (referencedPaths.has(file.name)) {
+          prefixKept++;
+        } else {
+          deleteQueue.push(file);
         }
       }
+
+      // Eliminar huérfanos en batches cuando se acumulan suficientes
+      while (deleteQueue.length >= DELETE_BATCH) {
+        const batch = deleteQueue.splice(0, DELETE_BATCH);
+        const results = await Promise.allSettled(batch.map(f => f.delete()));
+        for (const result of results) {
+          if (result.status === 'fulfilled') {
+            prefixDeleted++;
+          } else {
+            totalDeleteFailed++;
+            if (totalDeleteFailed <= 10) {
+              logger.warn(`    Error eliminando: ${result.reason?.message || result.reason}`);
+            }
+          }
+        }
+      }
+
+      if (prefixListed % 5000 === 0 && prefixListed > 0) {
+        logger.info(`    ${prefix}: listados ${prefixListed.toLocaleString()}, eliminados ${prefixDeleted.toLocaleString()}, conservados ${prefixKept.toLocaleString()}`);
+      }
+
+      query = nextQuery;
+    } while (query);
+
+    // Eliminar huérfanos restantes del queue
+    if (deleteQueue.length > 0) {
+      const results = await Promise.allSettled(deleteQueue.map(f => f.delete()));
+      for (const result of results) {
+        if (result.status === 'fulfilled') {
+          prefixDeleted++;
+        } else {
+          totalDeleteFailed++;
+          if (totalDeleteFailed <= 10) {
+            logger.warn(`    Error eliminando: ${result.reason?.message || result.reason}`);
+          }
+        }
+      }
+      deleteQueue = [];
     }
-    if ((deleted + deleteFailed) % 1000 === 0 || i + BATCH >= orphans.length) {
-      logger.info(`    Progreso: ${(deleted + deleteFailed).toLocaleString()} / ${orphans.length.toLocaleString()} (${deleted.toLocaleString()} ok, ${deleteFailed.toLocaleString()} failed)`);
-    }
+
+    logger.info(`    ${prefix}: ${prefixListed.toLocaleString()} listados, ${prefixDeleted.toLocaleString()} eliminados, ${prefixKept.toLocaleString()} conservados`);
+
+    totalListed += prefixListed;
+    totalKept += prefixKept;
+    totalDeleted += prefixDeleted;
   }
 
-  logger.info(`    Eliminación completa: ${deleted.toLocaleString()} eliminados, ${deleteFailed.toLocaleString()} fallidos`);
-
-  // Paso 4: Verificación
+  // Paso 4: Verificación (conteo ligero por prefijo)
   logger.info('  Paso 4: Verificación...');
   let remainingCount = 0;
-  let verifyQuery = {};
-  do {
-    const [files, nextQuery] = await bucket.getFiles(verifyQuery);
-    remainingCount += files.length;
-    verifyQuery = nextQuery;
-  } while (verifyQuery);
-
-  logger.info(`    Archivos restantes en bucket: ${remainingCount.toLocaleString()}`);
-  logger.info(`    Archivos referenciados en BD: ${referencedPaths.size.toLocaleString()}`);
-
-  if (deleteFailed > 0) {
-    errors.push({ error: `${deleteFailed} archivos no pudieron eliminarse` });
+  for (const prefix of PREFIXES) {
+    let prefixCount = 0;
+    let vQuery = { prefix, maxResults: PAGE_SIZE };
+    do {
+      const [files, nextQuery] = await bucket.getFiles(vQuery);
+      prefixCount += files.length;
+      vQuery = nextQuery;
+    } while (vQuery);
+    logger.info(`    ${prefix}: ${prefixCount.toLocaleString()} archivos restantes`);
+    remainingCount += prefixCount;
   }
 
-  logger.info(`\n  Fase 14c completa: ${deleted.toLocaleString()} eliminados, ${kept.toLocaleString()} conservados, ${deleteFailed} fallidos`);
-  return { migrated: deleted, skipped: kept, failed: deleteFailed, errors };
+  logger.info(`    Total archivos restantes en bucket: ${remainingCount.toLocaleString()}`);
+  logger.info(`    Archivos referenciados en BD: ${referencedPaths.size.toLocaleString()}`);
+
+  if (totalDeleteFailed > 0) {
+    errors.push({ error: `${totalDeleteFailed} archivos no pudieron eliminarse` });
+  }
+
+  logger.info(`\n  Fase 14c completa: ${totalDeleted.toLocaleString()} eliminados, ${totalKept.toLocaleString()} conservados, ${totalDeleteFailed} fallidos`);
+  return { migrated: totalDeleted, skipped: totalKept, failed: totalDeleteFailed, errors };
 };
