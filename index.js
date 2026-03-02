@@ -19,7 +19,7 @@ Fases: 0(Infra), 1(Catálogos), 2(Sucursales), 3(Seguridad), 3b(Fix Passwords),
        4e(Fix Guatemala), 4f(Fix Colombia), 5(Clientes), 6(Red MLM), 7(Ventas),
        7b(Tipos Orden), 8(Facturación), 9(Comisiones), 10(Inventario),
        10b(Proveedores), 10c(Fix Stock), 11(RRHH), 12(Comunicación), 13(Auditoría),
-       14(GCS), 14b(Dedup Imgs), 99(Post-Migración)
+       14(GCS), 14b(Dedup Imgs), 14c(GCS Cleanup), 99(Post-Migración)
 
 Requiere .env con credenciales. Copia .env.example como plantilla.
 `);
@@ -60,11 +60,12 @@ const PHASES = {
   13:  { name: 'Auditoría y Logs',           module: './phases/phase-13-audit' },
   14:  { name: 'Archivos GCS',               module: './phases/phase-14-gcs-files' },
   '14b': { name: 'Dedup Product Images',    module: './phases/phase-14b-dedup-images' },
+  '14c': { name: 'Cleanup GCS Orphans',    module: './phases/phase-14c-cleanup-gcs' },
   99:  { name: 'Post-Migración/Validación',  module: './phases/phase-99-post-migration' },
 };
 
 // Orden de ejecución por defecto (todas las fases)
-const DEFAULT_ORDER = [0, 1, 2, 3, '3b', 4, '4b', '4c', '4d', '4e', '4f', 5, 6, 7, '7b', 8, 9, 10, '10b', '10c', 11, 12, 13, 14, '14b', 99];
+const DEFAULT_ORDER = [0, 1, 2, 3, '3b', 4, '4b', '4c', '4d', '4e', '4f', 5, 6, 7, '7b', 8, 9, 10, '10b', '10c', 11, 12, 13, 14, '14b', '14c', 99];
 
 // =============================================
 // Parseo de argumentos
@@ -83,7 +84,7 @@ function parseArgs() {
     if (arg === '--phase' || arg === '-p') {
       const val = args[++i];
       if (val !== undefined) {
-        const phaseKey = (val === '10b' || val === '10c' || val === '14b' || val === '3b' || val === '4b' || val === '4c' || val === '4d' || val === '4e' || val === '4f' || val === '7b') ? val : Number(val);
+        const phaseKey = (val === '10b' || val === '10c' || val === '14b' || val === '14c' || val === '3b' || val === '4b' || val === '4c' || val === '4d' || val === '4e' || val === '4f' || val === '7b') ? val : Number(val);
         if (PHASES[phaseKey]) {
           options.phases.push(phaseKey);
         } else {
