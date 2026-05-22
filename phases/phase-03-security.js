@@ -1,173 +1,71 @@
+// ============================================================================
+// PHASE 03: Seguridad y Acceso
+// ============================================================================
+// MODIFICADO 2026-05-19:
+//   - SKIP migracion de roles, permissions y role_permissions desde v1
+//     (mig 019 ya consolido 94->27 roles; user maneja roles/permisos
+//     manualmente desde admin v2).
+//   - role_id se asigna asi:
+//       * Users con customer_id NOT NULL -> role 'customer'
+//       * Resto -> role fallback 'asistente' (usuario reasigna desde admin)
+//   - Re-runs no modifican role_id de usuarios existentes (preserva ajustes
+//     manuales). Solo INSERTs nuevos toman estos defaults.
+//
+// Sub-fases mantenidas:
+//   - workers (t_worker -> workers)
+//   - users (t_users -> users) con role_id lookup directo en v2.tonic.roles
+//   - password_hash fix bcrypt -> AES-256-GCM
+//   - user_branches (t_users_branch_office -> user_branches)
+// ============================================================================
+
 const logger = require('../utils/logger');
 const idResolver = require('../utils/id-resolver');
 const { processSmallTable, processWithCursor, getCount } = require('../utils/batch-processor');
-const { hashPassword } = require('../utils/crypto');
+const { hashPassword, encrypt } = require('../utils/crypto');
 const { cleanString } = require('../utils/validators');
 const config = require('../config');
 
+const FALLBACK_ROLE_CODE = 'asistente';
+const CUSTOMER_ROLE_CODE = 'customer';
+
+async function resolveRoleIdByCode(v2Pool, code) {
+  const { rows } = await v2Pool.query(
+    'SELECT id FROM tonic.roles WHERE code = $1 LIMIT 1',
+    [code]
+  );
+  return rows.length > 0 ? rows[0].id : null;
+}
+
 module.exports = async function phase03(v1Pool, v2Pool) {
-  logger.phase('03', 'Seguridad y Acceso');
+  logger.phase('03', 'Seguridad y Acceso (SKIP roles/permissions, solo workers/users/user_branches)');
   const allResults = [];
 
-  // Pre-calentar caché — FIX: removed column: 'id'
+  // Pre-calentar cache
   await idResolver.warmUp(v2Pool, [
     { type: 'branch', table: 'branches' },
   ]);
 
-  // --- roles ---
-  logger.table('roles', 'Migrando t_profile → roles');
-  allResults.push(await processSmallTable({
-    v1Pool, v2Pool,
-    sourceQuery: 'SELECT id_profile, description_profile, enabled_profile, main_profile, request_break_box FROM toniclife.t_profile ORDER BY id_profile',
-    tableName: 'roles',
-    transformAndInsert: async (row, client) => {
-      const code = (row.main_profile || row.description_profile || `ROLE${row.id_profile}`)
-        .toString().substring(0, 50).toLowerCase().replace(/\s+/g, '_');
-      const { rows } = await client.query(
-        `INSERT INTO tonic.roles (id, code, name, requires_cash_close, is_active)
-         VALUES (gen_random_uuid(), $1, $2, $3, COALESCE($4::boolean, true))
-         ON CONFLICT (code) DO UPDATE SET
-           name = EXCLUDED.name,
-           requires_cash_close = EXCLUDED.requires_cash_close,
-           is_active = EXCLUDED.is_active,
-           updated_at = NOW()
-         RETURNING id`,
-        [
-          code,
-          cleanString(row.description_profile) || code,
-          row.request_break_box || false,
-          row.enabled_profile != null ? row.enabled_profile == 1 : true,
-        ]
-      );
-      if (rows.length > 0) {
-        await idResolver.registerMapping(v2Pool, 'role', row.id_profile, rows[0].id, 't_profile');
-      }
-    },
-  }));
+  // ============================================================
+  // Pre-resolve role IDs desde v2 (NO se insertan; solo lookup).
+  // ============================================================
+  const customerRoleId = await resolveRoleIdByCode(v2Pool, CUSTOMER_ROLE_CODE);
+  const fallbackRoleId = await resolveRoleIdByCode(v2Pool, FALLBACK_ROLE_CODE);
 
-  // --- permissions ---
-  logger.table('permissions', 'Migrando t_tags_items → permissions');
-  allResults.push(await processSmallTable({
-    v1Pool, v2Pool,
-    sourceQuery: `SELECT id_tags_items_parent_master, id_tags_items_parent, id_tags_items,
-                         description, a_href, show, enabled, icon, number
-                  FROM toniclife.t_tags_items ORDER BY number, id_tags_items`,
-    tableName: 'permissions',
-    transformAndInsert: async (row, client) => {
-      const code = (row.id_tags_items || '').toString().trim();
-      if (!code) return 'skipped';
+  if (!customerRoleId) {
+    logger.error(`  Rol '${CUSTOMER_ROLE_CODE}' no existe en v2. Crear primero desde mig 002/019.`);
+    return { migrated: 0, skipped: 0, failed: 0, errors: [{ error: `Missing role '${CUSTOMER_ROLE_CODE}'` }] };
+  }
+  if (!fallbackRoleId) {
+    logger.error(`  Rol fallback '${FALLBACK_ROLE_CODE}' no existe en v2. Crear primero.`);
+    return { migrated: 0, skipped: 0, failed: 0, errors: [{ error: `Missing role '${FALLBACK_ROLE_CODE}'` }] };
+  }
 
-      const parentCode = (row.id_tags_items_parent || '').toString().trim();
-      const module = (row.id_tags_items_parent_master || '').toString().trim() || 'system';
+  logger.info(`  Rol 'customer' = ${customerRoleId}`);
+  logger.info(`  Rol fallback '${FALLBACK_ROLE_CODE}' = ${fallbackRoleId}`);
 
-      let parentId = null;
-      if (parentCode && parentCode !== code) {
-        const parentResult = await client.query(
-          'SELECT id FROM tonic.permissions WHERE code = $1 LIMIT 1',
-          [parentCode]
-        );
-        if (parentResult.rows.length > 0) parentId = parentResult.rows[0].id;
-      }
-
-      const permType = parentCode ? 'action' : 'menu';
-
-      const { rows } = await client.query(
-        `INSERT INTO tonic.permissions (id, code, name, module, permission_type, parent_id, icon, route, sort_order, is_active)
-         VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, COALESCE($9::boolean, true))
-         ON CONFLICT (code) DO UPDATE SET
-           name = EXCLUDED.name,
-           module = EXCLUDED.module,
-           permission_type = EXCLUDED.permission_type,
-           parent_id = EXCLUDED.parent_id,
-           icon = EXCLUDED.icon,
-           route = EXCLUDED.route,
-           sort_order = EXCLUDED.sort_order,
-           is_active = EXCLUDED.is_active,
-           updated_at = NOW()
-         RETURNING id`,
-        [
-          code,
-          cleanString(row.description) || code,
-          module,
-          permType,
-          parentId,
-          cleanString(row.icon),
-          cleanString(row.a_href),
-          row.number || 0,
-          row.enabled != null ? row.enabled == 1 : true,
-        ]
-      );
-      if (rows.length > 0) {
-        await idResolver.registerMapping(v2Pool, 'permission', code, rows[0].id, 't_tags_items');
-      }
-    },
-  }));
-
-  // --- role_permissions ---
-  logger.table('role_permissions', 'Migrando t_tags_items_profile → role_permissions');
-  allResults.push(await processSmallTable({
-    v1Pool, v2Pool,
-    sourceQuery: `SELECT id_profile, id_tags_items, enabled
-                  FROM toniclife.t_tags_items_profile
-                  WHERE enabled = 1
-                  ORDER BY id_profile, id_tags_items`,
-    tableName: 'role_permissions',
-    transformAndInsert: async (row, client) => {
-      const roleId = await idResolver.resolve(v2Pool, 'role', row.id_profile);
-      if (!roleId) return 'skipped';
-
-      const permCode = (row.id_tags_items || '').toString().trim();
-      if (!permCode) return 'skipped';
-
-      const permResult = await client.query(
-        'SELECT id FROM tonic.permissions WHERE code = $1 LIMIT 1',
-        [permCode]
-      );
-      if (permResult.rows.length === 0) return 'skipped';
-      const permissionId = permResult.rows[0].id;
-
-      await client.query(
-        `INSERT INTO tonic.role_permissions (id, role_id, permission_id, granted)
-         VALUES (gen_random_uuid(), $1, $2, true)
-         ON CONFLICT ON CONSTRAINT uq_role_permissions DO NOTHING`,
-        [roleId, permissionId]
-      );
-    },
-  }));
-
-  // También migrar acciones de t_tags_items_profile_action
-  logger.table('role_permissions', 'Migrando t_tags_items_profile_action → role_permissions (acciones)');
-  allResults.push(await processSmallTable({
-    v1Pool, v2Pool,
-    sourceQuery: `SELECT id_profile, id_tags_items, id_action, enabled
-                  FROM toniclife.t_tags_items_profile_action
-                  WHERE enabled = 1
-                  ORDER BY id_profile, id_tags_items`,
-    tableName: 'role_permissions',
-    transformAndInsert: async (row, client) => {
-      const roleId = await idResolver.resolve(v2Pool, 'role', row.id_profile);
-      if (!roleId) return 'skipped';
-
-      const permCode = (row.id_tags_items || '').toString().trim();
-      if (!permCode) return 'skipped';
-
-      const permResult = await client.query(
-        'SELECT id FROM tonic.permissions WHERE code = $1 LIMIT 1',
-        [permCode]
-      );
-      if (permResult.rows.length === 0) return 'skipped';
-      const permissionId = permResult.rows[0].id;
-
-      await client.query(
-        `INSERT INTO tonic.role_permissions (id, role_id, permission_id, granted)
-         VALUES (gen_random_uuid(), $1, $2, true)
-         ON CONFLICT ON CONSTRAINT uq_role_permissions DO NOTHING`,
-        [roleId, permissionId]
-      );
-    },
-  }));
-
-  // --- workers ---
+  // ============================================================
+  // workers (t_worker -> workers)
+  // ============================================================
   logger.table('workers', 'Migrando t_worker → workers');
   allResults.push(await processSmallTable({
     v1Pool, v2Pool,
@@ -213,23 +111,15 @@ module.exports = async function phase03(v1Pool, v2Pool) {
     },
   }));
 
-  // --- users (tabla grande: ~218K) ---
-  // SPECIAL ON CONFLICT RULES: Only update username, worker_id, customer_id, status, is_active.
-  // NEVER overwrite email, password_hash, role_id, last_login_at, etc.
+  // ============================================================
+  // users (~218K)
+  // ON CONFLICT (legacy_id) DO UPDATE: solo username, customer_id, worker_id,
+  // status, is_active. NUNCA sobrescribe role_id ni password_hash (preserva
+  // ajustes manuales y passwords ya migrados).
+  // ============================================================
   logger.table('users', 'Migrando t_users → users');
   const userCount = await getCount(v1Pool, 'SELECT COUNT(*) AS count FROM toniclife.t_users');
   logger.info(`    Total registros en t_users: ${userCount.toLocaleString()}`);
-
-  let defaultRoleId = await idResolver.resolve(v2Pool, 'role', 5);
-  if (!defaultRoleId) {
-    const { rows } = await v2Pool.query('SELECT id FROM tonic.roles LIMIT 1');
-    defaultRoleId = rows.length > 0 ? rows[0].id : null;
-  }
-
-  if (!defaultRoleId) {
-    logger.error('  No hay roles en v2. No se puede migrar usuarios.');
-    return { migrated: 0, skipped: 0, failed: 0, errors: [{ error: 'No roles found in v2' }] };
-  }
 
   allResults.push(await processWithCursor({
     v1Pool, v2Pool,
@@ -240,8 +130,9 @@ module.exports = async function phase03(v1Pool, v2Pool) {
     totalCount: userCount,
     batchSize: config.migration.batchSize,
     transformAndInsert: async (row, client) => {
-      // Check if user already exists — skip expensive bcrypt (~100ms) for existing users
-      // since ON CONFLICT does NOT overwrite password_hash
+      // Si usuario ya existe, ON CONFLICT no escribe password_hash, asi que
+      // saltamos el hash costoso y usamos placeholder para satisfacer NOT NULL
+      // en el path de INSERT.
       const existsResult = await client.query(
         'SELECT 1 FROM tonic.users WHERE legacy_id = $1 LIMIT 1',
         [row.id_user]
@@ -252,11 +143,8 @@ module.exports = async function phase03(v1Pool, v2Pool) {
       let mustChangePassword = false;
 
       if (alreadyExists) {
-        // User exists — password_hash won't be written (ON CONFLICT skips it),
-        // so use a cheap placeholder to satisfy the NOT NULL column on INSERT path
         passwordHash = 'EXISTING_SKIP';
       } else {
-        // New user — needs real hash
         if (row.password_user && row.password_user.trim() !== '') {
           passwordHash = await hashPassword(row.password_user);
         }
@@ -266,7 +154,11 @@ module.exports = async function phase03(v1Pool, v2Pool) {
         }
       }
 
-      const roleId = await idResolver.resolve(v2Pool, 'role', row.id_profile) || defaultRoleId;
+      // role_id por defecto en INSERTs nuevos:
+      //   id_customers presente -> 'customer'
+      //   sino                  -> fallback (user reasigna desde admin)
+      // NOTA: en UPDATEs (ON CONFLICT), role_id NO se sobrescribe.
+      const roleId = row.id_customers ? customerRoleId : fallbackRoleId;
 
       let customerId = null;
       if (row.id_customers) {
@@ -303,26 +195,29 @@ module.exports = async function phase03(v1Pool, v2Pool) {
           is_active = EXCLUDED.is_active,
           updated_at = NOW()`,
         [
-          row.id_user,                                      // $1
-          username,                                          // $2
-          passwordHash,                                      // $3
-          roleId,                                            // $4
-          customerId,                                        // $5
-          workerId,                                           // $6
-          status,                                            // $7
-          mustChangePassword,                                // $8
-          row.last_update_password || null,                   // $9
-          cleanString(row.recovery_code),                    // $10
-          row.recovery_sent_at || null,                      // $11
-          row.enabled_user == 1,                             // $12
+          row.id_user,
+          username,
+          passwordHash,
+          roleId,
+          customerId,
+          workerId,
+          status,
+          mustChangePassword,
+          row.last_update_password || null,
+          cleanString(row.recovery_code),
+          row.recovery_sent_at || null,
+          row.enabled_user == 1,
         ]
       );
     },
   }));
 
-  // --- Corrección: password_hash de bcrypt → AES-256-GCM ---
-  logger.info('    Corrigiendo password_hash de bcrypt → AES-256-GCM...');
-  const { encrypt } = require('../utils/crypto');
+  // ============================================================
+  // Correccion password_hash bcrypt -> AES-256-GCM (idempotente)
+  // Solo afecta filas con password_hash LIKE '$2b$%'. Si ya estan en
+  // AES-GCM, el WHERE las excluye y el rowCount sera 0.
+  // ============================================================
+  logger.info('    Corrigiendo password_hash de bcrypt -> AES-256-GCM...');
   const PASS_BATCH = 5000;
   const passData = await v1Pool.query(
     "SELECT id_user, password_user FROM toniclife.t_users WHERE password_user IS NOT NULL AND password_user != '' ORDER BY id_user"
@@ -355,7 +250,9 @@ module.exports = async function phase03(v1Pool, v2Pool) {
   }
   logger.info(`    password_hash corregidos: ${passUpdated.toLocaleString()}`);
 
-  // --- user_branches ---
+  // ============================================================
+  // user_branches (t_users_branch_office -> user_branches)
+  // ============================================================
   logger.table('user_branches', 'Migrando t_users_branch_office → user_branches');
   allResults.push(await processSmallTable({
     v1Pool, v2Pool,
@@ -376,7 +273,9 @@ module.exports = async function phase03(v1Pool, v2Pool) {
       await client.query(
         `INSERT INTO tonic.user_branches (id, user_id, branch_id, is_default, is_active)
          VALUES (gen_random_uuid(), $1, $2, false, COALESCE($3::boolean, true))
-         ON CONFLICT ON CONSTRAINT uq_user_branches DO NOTHING`,
+         ON CONFLICT ON CONSTRAINT uq_user_branches DO UPDATE SET
+           is_active = EXCLUDED.is_active,
+           updated_at = NOW()`,
         [userId, branchId, row.enabled != null ? row.enabled == 1 : true]
       );
     },

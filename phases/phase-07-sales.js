@@ -98,7 +98,11 @@ module.exports = async function phase07(v1Pool, v2Pool) {
         `INSERT INTO tonic.promotion_items (
           id, promotion_id, product_id, min_quantity, free_quantity, is_active
         ) VALUES (gen_random_uuid(), $1, $2, $3, $4, true)
-        ON CONFLICT DO NOTHING`,
+        ON CONFLICT ON CONSTRAINT uq_promotion_items_pair DO UPDATE SET
+          min_quantity = EXCLUDED.min_quantity,
+          free_quantity = EXCLUDED.free_quantity,
+          is_active = EXCLUDED.is_active,
+          updated_at = NOW()`,
         [promotionId, productId, toDecimal(row.qty_min, 1), toDecimal(row.qty_free, 0)]
       );
     },

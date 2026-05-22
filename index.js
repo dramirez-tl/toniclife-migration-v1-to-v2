@@ -21,7 +21,7 @@ Fases: 0(Infra), 1(Catálogos), 2(Sucursales), 3(Seguridad), 3b(Fix Passwords),
        7b(Tipos Orden), 8(Facturación), 9(Comisiones), 10(Inventario),
        10b(Proveedores), 10c(Fix Stock), 11(RRHH), 12(Comunicación), 13(Auditoría),
        14(GCS), 14b(Dedup Imgs), 14c(GCS Cleanup), 14d(Fix Ext),
-       99(Post-Migración)
+       15(Kit Bonus Report), 16(Branch Purchases Report), 99(Post-Migración)
 
 Requiere .env con credenciales. Copia .env.example como plantilla.
 `);
@@ -65,11 +65,13 @@ const PHASES = {
   '14b': { name: 'Dedup Product Images',    module: './phases/phase-14b-dedup-images' },
   '14c': { name: 'Cleanup GCS Orphans',    module: './phases/phase-14c-cleanup-gcs' },
   '14d': { name: 'Fix File Extensions',    module: './phases/phase-14d-fix-extensions' },
+  15:  { name: 'Kit Bonus Report',           module: './phases/phase-15-kit-bonus-report' },
+  16:  { name: 'Branch Purchases Report',    module: './phases/phase-16-branch-purchases-report' },
   99:  { name: 'Post-Migración/Validación',  module: './phases/phase-99-post-migration' },
 };
 
 // Orden de ejecución por defecto (todas las fases)
-const DEFAULT_ORDER = [0, 1, 2, 3, '3b', 4, '4b', '4c', '4d', '4e', '4f', '4g', 5, 6, 7, '7b', 8, 9, 10, '10b', '10c', 11, 12, 13, 14, '14b', '14c', '14d', 99];
+const DEFAULT_ORDER = [0, 1, 2, 3, '3b', 4, '4b', '4c', '4d', '4e', '4f', '4g', 5, 6, 7, '7b', 8, 9, 10, '10b', '10c', 11, 12, 13, 14, '14b', '14c', '14d', 15, 16, 99];
 
 // =============================================
 // Parseo de argumentos

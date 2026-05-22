@@ -4,6 +4,29 @@ const { processSmallTable, processWithCursor, processWithCursorBulk, buildMultiR
 const { cleanString, slugify, validateEnum, toDecimal, toBoolean, prefixUrl } = require('../utils/validators');
 const config = require('../config');
 
+// ============================================================================
+// Mapping de v1 type_kit (basico/premium/preferente) -> v2 products.kit_position
+// (mig 028: CHECK kit_position IN ('basic','premium','preferente') OR NULL)
+// ============================================================================
+const KIT_POSITION_MAP = {
+  basico: 'basic',
+  premium: 'premium',
+  preferente: 'preferente',
+};
+
+// ============================================================================
+// Mapping de v1 t_product.point_min_1 -> v2 countries.code (para
+// product_promotion_rules; mig 036). Valores observados en v1 2026-05-19:
+//   4000, 6000  -> MX (Mexico)
+//   6600, 9900  -> US (Estados Unidos)
+// ============================================================================
+function inferPromoCountryCode(pointMin1) {
+  const v = Number(pointMin1);
+  if (v === 4000 || v === 6000) return 'MX';
+  if (v === 6600 || v === 9900) return 'US';
+  return null;
+}
+
 module.exports = async function phase04(v1Pool, v2Pool) {
   logger.phase('04', 'Productos');
   const allResults = [];
@@ -13,6 +36,14 @@ module.exports = async function phase04(v1Pool, v2Pool) {
     { type: 'branch', table: 'branches' },
     { type: 'tax_rule', table: 'tax_rules' },
   ]);
+
+  // Resolver country IDs para product_promotion_rules
+  const { rows: countryRows } = await v2Pool.query(
+    "SELECT code, id FROM tonic.countries WHERE code IN ('MX','US')"
+  );
+  const countryByCode = new Map(countryRows.map(r => [r.code, r.id]));
+  logger.info(`  country MX = ${countryByCode.get('MX')}`);
+  logger.info(`  country US = ${countryByCode.get('US')}`);
 
   // --- product_categories ---
   logger.table('product_categories', 'Migrando t_clasification → product_categories');
@@ -160,7 +191,8 @@ module.exports = async function phase04(v1Pool, v2Pool) {
                          id_clasification, pack_product, stock_min_product, stock_max_product,
                          weight_product, price_product, avaible_store_product,
                          description_store_product, iva_product, id_branch_office,
-                         is_kit, type_kit, is_promo, enabled_product, code_sat,
+                         is_kit, type_kit, is_promo, point_min_1, point_min_2,
+                         enabled_product, code_sat,
                          id_product_unit, id_organ, benefits_product, dosis_product,
                          observation_product
                   FROM toniclife.t_product ORDER BY id_product`,
@@ -184,11 +216,21 @@ module.exports = async function phase04(v1Pool, v2Pool) {
       else if (row.is_promo == 1) productType = 'promotional';
       productType = validateEnum('products.product_type', productType, 'finished_good');
 
+      // kit_type: v1 no distingue fixed/dynamic explicitamente; todos los kits
+      // de v1 son de composicion fija (no configurables por usuario).
       let kitType = null;
+      if (productType === 'kit') kitType = 'fixed';
+
+      // kit_position: derivado de v1 t_product.type_kit
+      //   basico    -> 'basic'
+      //   premium   -> 'premium'
+      //   preferente -> 'preferente'
+      // Mig 028 agrego esta columna. Sin trigger que la haga obligatoria,
+      // pero la poblamos para data quality.
+      let kitPosition = null;
       if (productType === 'kit') {
-        const typeKitStr = (row.type_kit || '').toString().toLowerCase();
-        if (typeKitStr === 'dynamic' || typeKitStr === 'dinamico') kitType = 'dynamic';
-        else kitType = 'fixed';
+        const typeKitStr = (row.type_kit || '').toString().toLowerCase().trim();
+        kitPosition = KIT_POSITION_MAP[typeKitStr] || null;
       }
 
       const categoryId = await idResolver.resolve(v2Pool, 'product_category', row.id_clasification);
@@ -204,18 +246,18 @@ module.exports = async function phase04(v1Pool, v2Pool) {
       const { rows } = await client.query(
         `INSERT INTO tonic.products (
           id, code, name, description, long_description,
-          category_id, unit_id, product_type, kit_type,
+          category_id, unit_id, product_type, kit_type, kit_position,
           sat_product_code,
           tracks_inventory, min_stock_alert, max_stock_level,
           weight_kg, slug,
           is_visible_ecommerce, is_active
         ) VALUES (
           gen_random_uuid(), $1, $2, $3, $4,
-          $5, $6, $7, $8,
-          $9,
-          true, $10, $11,
-          $12, $13,
-          COALESCE($14::boolean, true), COALESCE($15::boolean, true)
+          $5, $6, $7, $8, $9,
+          $10,
+          true, $11, $12,
+          $13, $14,
+          COALESCE($15::boolean, true), COALESCE($16::boolean, true)
         )
         ON CONFLICT (code) DO UPDATE SET
           name = EXCLUDED.name,
@@ -225,6 +267,7 @@ module.exports = async function phase04(v1Pool, v2Pool) {
           unit_id = EXCLUDED.unit_id,
           product_type = EXCLUDED.product_type,
           kit_type = EXCLUDED.kit_type,
+          kit_position = EXCLUDED.kit_position,
           sat_product_code = EXCLUDED.sat_product_code,
           min_stock_alert = EXCLUDED.min_stock_alert,
           max_stock_level = EXCLUDED.max_stock_level,
@@ -238,7 +281,7 @@ module.exports = async function phase04(v1Pool, v2Pool) {
           code, name,
           cleanString(row.description_product), longDescription,
           categoryId, unitId,
-          productType, kitType,
+          productType, kitType, kitPosition,
           cleanString(row.code_sat),
           toDecimal(row.stock_min_product), toDecimal(row.stock_max_product),
           toDecimal(row.weight_product), slug,
@@ -247,8 +290,35 @@ module.exports = async function phase04(v1Pool, v2Pool) {
         ]
       );
 
-      if (rows.length > 0) {
-        await idResolver.registerMapping(v2Pool, 'product', row.id_product, rows[0].id, 't_product');
+      const productId = rows.length > 0 ? rows[0].id : null;
+      if (productId) {
+        await idResolver.registerMapping(v2Pool, 'product', row.id_product, productId, 't_product');
+      }
+
+      // ============================================================
+      // product_promotion_rules: si product_type='promotional', crear
+      // regla con country derivado de point_min_1. Mig 036 introdujo
+      // esta tabla; mig 037 trigger valida que product_type sea
+      // 'promotional'. Idempotente via UNIQUE (product_id, country_id).
+      // ============================================================
+      if (productId && productType === 'promotional') {
+        const countryCode = inferPromoCountryCode(row.point_min_1);
+        const countryId = countryCode ? countryByCode.get(countryCode) : null;
+        const minPoints = toDecimal(row.point_min_1, 0);
+
+        if (countryId && minPoints > 0) {
+          await client.query(
+            `INSERT INTO tonic.product_promotion_rules
+              (id, product_id, country_id, min_points_required, consumes_points, is_active)
+             VALUES (gen_random_uuid(), $1, $2, $3, true, true)
+             ON CONFLICT ON CONSTRAINT uq_promotion_rule_product_country DO UPDATE SET
+               min_points_required = EXCLUDED.min_points_required,
+               consumes_points = EXCLUDED.consumes_points,
+               is_active = EXCLUDED.is_active,
+               updated_at = NOW()`,
+            [productId, countryId, minPoints]
+          );
+        }
       }
     },
   }));
@@ -304,6 +374,7 @@ module.exports = async function phase04(v1Pool, v2Pool) {
   }));
 
   // --- product_images (GCS uploads → row-by-row) ---
+  // Idempotente desde mig 039: usa legacy_id = t_product_photo.id_photo.
   logger.table('product_images', 'Migrando t_product_photo → product_images');
   allResults.push(await processSmallTable({
     v1Pool, v2Pool,
@@ -318,10 +389,18 @@ module.exports = async function phase04(v1Pool, v2Pool) {
       if (!imageUrl) return 'skipped';
 
       const { rows } = await client.query(
-        `INSERT INTO tonic.product_images (id, product_id, image_url, alt_text, sort_order, is_active)
-         VALUES (gen_random_uuid(), $1, $2, $3, 0, true)
+        `INSERT INTO tonic.product_images
+          (id, legacy_id, product_id, image_url, alt_text, sort_order, is_active)
+         VALUES (gen_random_uuid(), $1, $2, $3, $4, 0, true)
+         ON CONFLICT (legacy_id) WHERE legacy_id IS NOT NULL DO UPDATE SET
+           product_id = EXCLUDED.product_id,
+           image_url = CASE WHEN tonic.product_images.image_url LIKE 'https://storage.googleapis.com/%'
+                            THEN tonic.product_images.image_url ELSE EXCLUDED.image_url END,
+           alt_text = EXCLUDED.alt_text,
+           is_active = EXCLUDED.is_active,
+           updated_at = NOW()
          RETURNING id`,
-        [productId, imageUrl, cleanString(row.alt_photo) || cleanString(row.name_photo)]
+        [row.id_photo, productId, imageUrl, cleanString(row.alt_photo) || cleanString(row.name_photo)]
       );
       if (rows.length > 0) {
         await idResolver.registerMapping(v2Pool, 'product_image', row.id_photo, rows[0].id, 't_product_photo');
@@ -404,7 +483,10 @@ module.exports = async function phase04(v1Pool, v2Pool) {
       await client.query(
         `INSERT INTO tonic.product_components (id, product_id, component_id, quantity, is_active)
          VALUES (gen_random_uuid(), $1, $2, $3, COALESCE($4::boolean, true))
-         ON CONFLICT DO NOTHING`,
+         ON CONFLICT ON CONSTRAINT uq_product_components_pair DO UPDATE SET
+           quantity = EXCLUDED.quantity,
+           is_active = EXCLUDED.is_active,
+           updated_at = NOW()`,
         [productId, componentId, toDecimal(row.qty, 1), row.enabled_component != null ? row.enabled_component == 1 : true]
       );
     },
@@ -425,7 +507,10 @@ module.exports = async function phase04(v1Pool, v2Pool) {
       await client.query(
         `INSERT INTO tonic.product_taxes (id, product_id, tax_rule_id, sort_order, is_active)
          VALUES (gen_random_uuid(), $1, $2, $3, true)
-         ON CONFLICT ON CONSTRAINT uq_product_taxes DO NOTHING`,
+         ON CONFLICT ON CONSTRAINT uq_product_taxes DO UPDATE SET
+           sort_order = EXCLUDED.sort_order,
+           is_active = EXCLUDED.is_active,
+           updated_at = NOW()`,
         [productId, taxRuleId, row.order_tax ? 1 : 0]
       );
     },
@@ -448,7 +533,9 @@ module.exports = async function phase04(v1Pool, v2Pool) {
       await client.query(
         `INSERT INTO tonic.product_exemptions (id, product_id, exemption_type, is_active)
          VALUES (gen_random_uuid(), $1, $2, true)
-         ON CONFLICT DO NOTHING`,
+         ON CONFLICT ON CONSTRAINT uq_product_exemptions_pair DO UPDATE SET
+           is_active = EXCLUDED.is_active,
+           updated_at = NOW()`,
         [productId, exemptionType]
       );
     },

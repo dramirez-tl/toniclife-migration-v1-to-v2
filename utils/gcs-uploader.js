@@ -215,6 +215,147 @@ async function uploadMultiple(files) {
   );
 }
 
+// --- Download + upload FORZANDO sobrescritura (sin skip por exists) ---
+async function downloadAndUploadForce(sourceUrl, gcsPath, retries) {
+  const file = bucket.file(gcsPath);
+
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      const res = await httpGet(sourceUrl);
+
+      if (res.statusCode === 404) {
+        stats.failed++;
+        return null; // No existe en origen — NO borrar lo que ya hay
+      }
+      if (res.statusCode !== 200) {
+        res.resume();
+        throw new Error(`HTTP ${res.statusCode}`);
+      }
+
+      const ext = path.extname(gcsPath).toLowerCase();
+      const contentType = MIME_MAP[ext] || 'application/octet-stream';
+
+      await new Promise((resolve, reject) => {
+        const writeStream = file.createWriteStream({
+          metadata: { contentType },
+          resumable: false,
+        });
+        res.pipe(writeStream);
+        writeStream.on('finish', resolve);
+        writeStream.on('error', reject);
+        res.on('error', reject);
+      });
+
+      stats.uploaded++;
+      return gcsPath;
+    } catch (err) {
+      if (attempt === retries) {
+        stats.failed++;
+        return null;
+      }
+      await sleep(1000 * Math.pow(2, attempt - 1));
+    }
+  }
+}
+
+/**
+ * Reemplaza el archivo de un "slot" de UNA sola entidad (1 archivo por slot):
+ * sube el archivo de v1 a un path canonico y BORRA cualquier otro objeto del
+ * folder del slot. Garantiza exactamente 1 archivo por folder.
+ *
+ * Orden seguro contra perdida de datos:
+ *   1. Descarga de v1 + sube el nuevo a {gcsFolder}/{canonicalName}.{ext}
+ *   2. Solo si la subida fue EXITOSA, borra los demas objetos del folder.
+ *   3. Si v1 da 404/error, NO borra nada y retorna fallback (conserva lo viejo).
+ *
+ * Para slots de 1 archivo: customers/{id}/photo, /contract, /ine,
+ * /bank-statement, /tax-id; invoices/xml/{id}; purchase-orders/{id};
+ * system-files/{id}. NO usar para product_images (varios por producto).
+ *
+ * @param {string|null} rawFilePath - valor crudo de la columna v1
+ * @param {string} gcsFolder - folder del slot (sin filename)
+ * @param {string} canonicalName - nombre base canonico (sin extension), ej "photo"
+ * @returns {Promise<string|null>} URL publica de GCS, o fallback prefixUrl, o null
+ */
+async function replaceFileSingle(rawFilePath, gcsFolder, canonicalName) {
+  if (!gcsEnabled) return prefixUrl(rawFilePath);
+  if (rawFilePath === null || rawFilePath === undefined) return null;
+  const trimmed = String(rawFilePath).trim();
+  if (trimmed === '') return null;
+
+  const sourceUrl = prefixUrl(trimmed);
+  if (!sourceUrl) return null;
+
+  // URLs externas (Drive/YouTube): se devuelven tal cual, no se gestionan en GCS
+  if (!sourceUrl.includes('tonic-life.net')) return sourceUrl;
+
+  const folder = gcsFolder.replace(/\/+$/, '');
+  const ext = path.extname(trimmed).toLowerCase();
+  const gcsPath = `${folder}/${canonicalName}${ext}`.replace(/\/+/g, '/');
+
+  await semaphore.acquire();
+  try {
+    // 1. Subir el nuevo (forzar overwrite). Si falla, no tocar lo viejo.
+    const result = await downloadAndUploadForce(sourceUrl, gcsPath, config.gcs.retryAttempts);
+    if (!result) return prefixUrl(rawFilePath);
+
+    // 2. Borrar los demas objetos del folder (versiones viejas / otra extension)
+    try {
+      const [existing] = await bucket.getFiles({ prefix: `${folder}/` });
+      const toDelete = existing.filter(f => f.name !== gcsPath);
+      if (toDelete.length > 0) {
+        await Promise.allSettled(toDelete.map(f => f.delete()));
+      }
+    } catch (_) {
+      // Si falla el borrado de viejos, no es fatal: 14c los limpia luego.
+    }
+
+    return result;
+  } catch (err) {
+    stats.failed++;
+    return prefixUrl(rawFilePath);
+  } finally {
+    semaphore.release();
+  }
+}
+
+/**
+ * Reemplaza una imagen de producto (varias por producto) en un path
+ * deterministico por legacy_id, forzando sobrescritura. NO borra otros
+ * objetos del folder (el producto puede tener mas imagenes). La limpieza
+ * de huerfanos por cambio de extension la hace 14b/14c.
+ *
+ * @param {string|null} rawFilePath
+ * @param {string} gcsFolder - products/images/{product_id}
+ * @param {string} canonicalName - ej "img-{legacy_id}"
+ * @returns {Promise<string|null>}
+ */
+async function replaceFileVersioned(rawFilePath, gcsFolder, canonicalName) {
+  if (!gcsEnabled) return prefixUrl(rawFilePath);
+  if (rawFilePath === null || rawFilePath === undefined) return null;
+  const trimmed = String(rawFilePath).trim();
+  if (trimmed === '') return null;
+
+  const sourceUrl = prefixUrl(trimmed);
+  if (!sourceUrl) return null;
+  if (!sourceUrl.includes('tonic-life.net')) return sourceUrl;
+
+  const folder = gcsFolder.replace(/\/+$/, '');
+  const ext = path.extname(trimmed).toLowerCase();
+  const gcsPath = `${folder}/${canonicalName}${ext}`.replace(/\/+/g, '/');
+
+  await semaphore.acquire();
+  try {
+    const result = await downloadAndUploadForce(sourceUrl, gcsPath, config.gcs.retryAttempts);
+    return result || prefixUrl(rawFilePath);
+  } catch (err) {
+    stats.failed++;
+    return prefixUrl(rawFilePath);
+  } finally {
+    semaphore.release();
+  }
+}
+
 /**
  * Get upload statistics.
  */
@@ -232,4 +373,4 @@ function resetStats() {
   stats.alreadyExisted = 0;
 }
 
-module.exports = { init, uploadFile, uploadMultiple, getStats, resetStats };
+module.exports = { init, uploadFile, uploadMultiple, replaceFileSingle, replaceFileVersioned, getStats, resetStats };

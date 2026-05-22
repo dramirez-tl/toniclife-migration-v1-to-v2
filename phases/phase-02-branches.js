@@ -2,15 +2,37 @@ const logger = require('../utils/logger');
 const idResolver = require('../utils/id-resolver');
 const { processSmallTable } = require('../utils/batch-processor');
 
+// ============================================================================
+// Mapeo de v1 t_branch_office.id_type_money -> moneda y pais.
+// t_branch_office NO tiene columna de pais; el unico indicador geografico
+// es id_type_money. Valores reales de t_type_money (verificado 2026-05-21):
+//   1 -> USD (Dolares)        -> pais US (Estados Unidos)
+//   2 -> MXN (Pesos Mexicanos)-> pais MX (Mexico)
+//   3 -> COP (Pesos Colombianos) -> pais CO (Colombia)
+//   4 -> GTQ (Quetzal)        -> pais GT (Guatemala)
+// (pg driver retorna bigint como STRING, por eso las claves son strings.)
+// ============================================================================
+const MONEY_MAP = {
+  '1': { currency: 'USD', country: 'US' },
+  '2': { currency: 'MXN', country: 'MX' },
+  '3': { currency: 'COP', country: 'CO' },
+  '4': { currency: 'GTQ', country: 'GT' },
+};
+const MONEY_DEFAULT = { currency: 'MXN', country: 'MX' };
+
 module.exports = async function phase02(v1Pool, v2Pool) {
   logger.phase('02', 'Sucursales');
   const allResults = [];
 
-  // Pre-calentar caché de entidades necesarias
+  // Pre-calentar caché para tax_rules (usado en branch_tax_rules)
   await idResolver.warmUp(v2Pool, [
-    { type: 'country', table: 'countries' },
-    { type: 'currency', table: 'currencies' },
+    { type: 'tax_rule', table: 'tax_rules' },
   ]);
+
+  // Cargar mapa country code -> uuid (countries no tiene legacy_id; se mapea
+  // por code, que es el unico identificador estable post-refactor de esquema).
+  const { rows: countryRows } = await v2Pool.query('SELECT code, id FROM tonic.countries');
+  const countryByCode = new Map(countryRows.map(r => [r.code, r.id]));
 
   // --- branches (paso 1: insertar sin parent_branch_id) ---
   logger.table('branches', 'Migrando t_branch_office → branches (paso 1: sin parent)');
@@ -21,17 +43,18 @@ module.exports = async function phase02(v1Pool, v2Pool) {
     transformAndInsert: async (row, client) => {
       const code = (row.abr_branch_office || row.name_branch_office || `BR${row.id_branch_office}`)
         .toString().substring(0, 20).replace(/\s+/g, '_').toUpperCase();
-      const countryId = await idResolver.resolve(v2Pool, 'country', row.id_country, 'countries');
 
-      // Mapear rounding_mode desde v1
+      // Derivar moneda + pais desde id_type_money (string del driver pg)
+      const money = MONEY_MAP[String(row.id_type_money)] || MONEY_DEFAULT;
+      const currencyCode = money.currency;
+      const countryId = countryByCode.get(money.country) || null;
+
+      // Mapear rounding_mode desde v1 (id_type_round string del driver)
       let roundingMode = 'half_up';
-      if (row.id_type_round) {
-        const roundMap = { 1: 'half_up', 2: 'half_down', 3: 'floor', 4: 'ceil', 5: 'none' };
-        roundingMode = roundMap[row.id_type_round] || 'half_up';
+      const roundMap = { '1': 'half_up', '2': 'half_down', '3': 'floor', '4': 'ceil', '5': 'none' };
+      if (row.id_type_round != null) {
+        roundingMode = roundMap[String(row.id_type_round)] || 'half_up';
       }
-
-      // Resolver currency_code
-      const currencyCode = row.id_type_money === 1 ? 'MXN' : row.id_type_money === 2 ? 'USD' : row.id_type_money === 3 ? 'COP' : 'MXN';
 
       const { rows } = await client.query(
         `INSERT INTO tonic.branches (
@@ -49,8 +72,8 @@ module.exports = async function phase02(v1Pool, v2Pool) {
         )
         ON CONFLICT (code) DO UPDATE SET
           name = EXCLUDED.name,
-          country_id = EXCLUDED.country_id,
-          currency_code = EXCLUDED.currency_code,
+          country_id = COALESCE(EXCLUDED.country_id, tonic.branches.country_id),
+          currency_code = COALESCE(EXCLUDED.currency_code, tonic.branches.currency_code),
           rounding_mode = EXCLUDED.rounding_mode,
           address_street = EXCLUDED.address_street,
           address_city = EXCLUDED.address_city,
@@ -120,7 +143,10 @@ module.exports = async function phase02(v1Pool, v2Pool) {
       await client.query(
         `INSERT INTO tonic.branch_tax_rules (id, branch_id, tax_rule_id, sort_order, is_active)
          VALUES (gen_random_uuid(), $1, $2, $3, true)
-         ON CONFLICT DO NOTHING`,
+         ON CONFLICT ON CONSTRAINT uq_branch_tax_rules DO UPDATE SET
+           sort_order = EXCLUDED.sort_order,
+           is_active = EXCLUDED.is_active,
+           updated_at = NOW()`,
         [branchId, taxRuleId, row.order_tax ? 1 : 0]
       );
     },

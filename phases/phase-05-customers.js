@@ -186,6 +186,14 @@ module.exports = async function phase05(v1Pool, v2Pool) {
       const bankStatementUrl = prefixUrl(row.file_cuenta_bancaria);
       const taxIdUrl = prefixUrl(row.file_constancia_fiscal);
 
+      // legal_name / fiscal_email (mig 015): v1 no tiene columnas dedicadas;
+      // usamos defaults razonables que se pueden corregir desde admin v2.
+      //   legal_name   <- "first_name last_name [mothers_last_name]" trimmed
+      //   fiscal_email <- email_customers (mismo email de contacto)
+      const legalNameParts = [firstName, lastName, cleanString(row.last_name_mot_customers)].filter(Boolean);
+      const legalName = cleanTrunc(legalNameParts.join(' '), 200);
+      const fiscalEmail = cleanString(row.email_customers);
+
       await client.query(
         `INSERT INTO tonic.customers (
           id, legacy_id, customer_number, first_name, last_name, mothers_last_name,
@@ -205,6 +213,7 @@ module.exports = async function phase05(v1Pool, v2Pool) {
           payroll_tax_regime_code, payroll_cfdi_use_code,
           payroll_curp, payroll_rfc, payroll_zip_code,
           payment_form_code,
+          legal_name, fiscal_email,
           is_active
         ) VALUES (
           gen_random_uuid(), $1, $2, $3, $4, $5,
@@ -224,6 +233,7 @@ module.exports = async function phase05(v1Pool, v2Pool) {
           $38, $39,
           $40, $41, $42,
           $43,
+          $45, $46,
           $44
         )
         ON CONFLICT (legacy_id) DO UPDATE SET
@@ -253,11 +263,18 @@ module.exports = async function phase05(v1Pool, v2Pool) {
           registration_date = EXCLUDED.registration_date,
           last_purchase_date = EXCLUDED.last_purchase_date,
           average_monthly_purchase = EXCLUDED.average_monthly_purchase,
-          photo_url = EXCLUDED.photo_url,
-          contract_url = EXCLUDED.contract_url,
-          ine_document_url = EXCLUDED.ine_document_url,
-          bank_statement_url = EXCLUDED.bank_statement_url,
-          tax_id_document_url = EXCLUDED.tax_id_document_url,
+          -- No sobrescribir URLs ya migradas a GCS con la URL legacy de v1.
+          -- Si la columna actual apunta a storage.googleapis.com, se conserva.
+          photo_url = CASE WHEN tonic.customers.photo_url LIKE 'https://storage.googleapis.com/%'
+                           THEN tonic.customers.photo_url ELSE EXCLUDED.photo_url END,
+          contract_url = CASE WHEN tonic.customers.contract_url LIKE 'https://storage.googleapis.com/%'
+                              THEN tonic.customers.contract_url ELSE EXCLUDED.contract_url END,
+          ine_document_url = CASE WHEN tonic.customers.ine_document_url LIKE 'https://storage.googleapis.com/%'
+                                  THEN tonic.customers.ine_document_url ELSE EXCLUDED.ine_document_url END,
+          bank_statement_url = CASE WHEN tonic.customers.bank_statement_url LIKE 'https://storage.googleapis.com/%'
+                                    THEN tonic.customers.bank_statement_url ELSE EXCLUDED.bank_statement_url END,
+          tax_id_document_url = CASE WHEN tonic.customers.tax_id_document_url LIKE 'https://storage.googleapis.com/%'
+                                     THEN tonic.customers.tax_id_document_url ELSE EXCLUDED.tax_id_document_url END,
           documents_validated = EXCLUDED.documents_validated,
           terms_accepted = EXCLUDED.terms_accepted,
           terms_accepted_at = EXCLUDED.terms_accepted_at,
@@ -271,6 +288,8 @@ module.exports = async function phase05(v1Pool, v2Pool) {
           payroll_rfc = EXCLUDED.payroll_rfc,
           payroll_zip_code = EXCLUDED.payroll_zip_code,
           payment_form_code = EXCLUDED.payment_form_code,
+          legal_name = EXCLUDED.legal_name,
+          fiscal_email = EXCLUDED.fiscal_email,
           is_active = EXCLUDED.is_active,
           updated_at = NOW()`,
         [
@@ -318,6 +337,8 @@ module.exports = async function phase05(v1Pool, v2Pool) {
           cleanTrunc(row.zip_code_nomina, 10),                      // $42 payroll_zip_code (max 10)
           cleanTrunc(row.payment_form_facturama, 10),               // $43 payment_form_code (max 10)
           status === 'active',                                      // $44 is_active
+          legalName,                                                 // $45 legal_name (mig 015)
+          fiscalEmail,                                               // $46 fiscal_email (mig 015)
         ]
       );
     },
@@ -390,23 +411,24 @@ module.exports = async function phase05(v1Pool, v2Pool) {
   logger.info(`    ✓ upline_id: ${uplineUpdated} actualizados`);
 
   // --- customer_addresses ---
-  // v1 t_customers_address: id_customers_address(bigint PK), id_customers(bigint),
-  //   zip_code_customers(varchar), department_customers(varchar),
-  //   province_customers(varchar), address_customers(varchar)
-  // v2 customer_addresses: customer_id, address_type(20), label(50), street(255),
-  //   ext_number(20), int_number(20), neighborhood(100), city(100), state(100),
-  //   zip_code(10), country_id(uuid FK), phone(20), reference, is_default, is_active
+  // Idempotente desde mig 039: usa legacy_id = t_customers_address.id_customers_address.
+  // Label deterministico por customer: "Direccion 1", "Direccion 2", etc.
+  // (Customer puede tener hasta 5 direcciones en v1; cleanup 02 TRUNCATE
+  // garantiza estado vacio antes de re-migrar.)
   logger.table('customer_addresses', 'Migrando t_customers_address → customer_addresses');
   const addrCount = await getCount(v1Pool, 'SELECT COUNT(*) AS count FROM toniclife.t_customers_address');
 
   // Resolver country_id default (México)
   const defaultCountryId = await idResolver.resolve(v2Pool, 'country', 1);
 
+  // Contador por customer para label deterministico
+  const addressCountByCustomer = new Map();
+
   allResults.push(await processWithCursor({
     v1Pool, v2Pool,
     sourceQuery: `SELECT id_customers_address, id_customers, zip_code_customers,
                          department_customers, province_customers, address_customers
-                  FROM toniclife.t_customers_address ORDER BY id_customers_address`,
+                  FROM toniclife.t_customers_address ORDER BY id_customers, id_customers_address`,
     tableName: 'customer_addresses',
     totalCount: addrCount,
     batchSize: config.migration.batchSize,
@@ -414,24 +436,46 @@ module.exports = async function phase05(v1Pool, v2Pool) {
       const customerId = await idResolver.resolve(v2Pool, 'customer', row.id_customers, 'customers');
       if (!customerId) return 'skipped';
 
+      // Ordinal per customer (1-based). Primera direccion -> is_default=true.
+      const key = String(row.id_customers);
+      const ordinal = (addressCountByCustomer.get(key) || 0) + 1;
+      addressCountByCustomer.set(key, ordinal);
+      const label = `Direccion ${ordinal}`;
+      const isDefault = ordinal === 1;
+
       const { rows } = await client.query(
         `INSERT INTO tonic.customer_addresses (
-          id, customer_id, address_type, label, street,
+          id, legacy_id, customer_id, address_type, label, street,
           city, state, zip_code, country_id,
           is_default, is_active
         ) VALUES (
-          gen_random_uuid(), $1, 'shipping', 'Principal', $2,
-          $3, $4, $5, $6,
-          true, true
+          gen_random_uuid(), $1, $2, 'shipping', $3, $4,
+          $5, $6, $7, $8,
+          $9, true
         )
+        ON CONFLICT (legacy_id) WHERE legacy_id IS NOT NULL DO UPDATE SET
+          customer_id = EXCLUDED.customer_id,
+          address_type = EXCLUDED.address_type,
+          label = EXCLUDED.label,
+          street = EXCLUDED.street,
+          city = EXCLUDED.city,
+          state = EXCLUDED.state,
+          zip_code = EXCLUDED.zip_code,
+          country_id = EXCLUDED.country_id,
+          is_default = EXCLUDED.is_default,
+          is_active = EXCLUDED.is_active,
+          updated_at = NOW()
         RETURNING id`,
         [
-          customerId,
-          cleanTrunc(row.address_customers, 255),                   // street
-          cleanTrunc(row.department_customers, 100),                 // city
-          cleanTrunc(row.province_customers, 100),                   // state
-          cleanTrunc(row.zip_code_customers, 10),                    // zip_code
-          defaultCountryId,                                          // country_id
+          row.id_customers_address,                                   // $1 legacy_id
+          customerId,                                                  // $2 customer_id
+          label,                                                       // $3 label
+          cleanTrunc(row.address_customers, 255),                     // $4 street
+          cleanTrunc(row.department_customers, 100),                  // $5 city
+          cleanTrunc(row.province_customers, 100),                    // $6 state
+          cleanTrunc(row.zip_code_customers, 10),                     // $7 zip_code
+          defaultCountryId,                                            // $8 country_id
+          isDefault,                                                   // $9 is_default
         ]
       );
       if (rows.length > 0) {
@@ -450,17 +494,27 @@ module.exports = async function phase05(v1Pool, v2Pool) {
       const customerId = await idResolver.resolve(v2Pool, 'customer', row.id_customers, 'customers');
       if (!customerId) return 'skipped';
 
+      const accountNumber = cleanString(row.account_number_bank) || null;
+
+      // Idempotente desde mig 039: UNIQUE parcial (customer_id, account_number)
+      // WHERE account_number IS NOT NULL. Sin account_number no aplica.
       const { rows } = await client.query(
         `INSERT INTO tonic.customer_bank_accounts (
           id, customer_id, bank_name, account_holder, clabe, account_number, is_default, is_active
         ) VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, true, true)
+        ON CONFLICT (customer_id, account_number) WHERE account_number IS NOT NULL DO UPDATE SET
+          bank_name = EXCLUDED.bank_name,
+          account_holder = EXCLUDED.account_holder,
+          clabe = EXCLUDED.clabe,
+          is_active = EXCLUDED.is_active,
+          updated_at = NOW()
         RETURNING id`,
         [
           customerId,
           cleanString(row.bank_name) || cleanString(row.name_bank) || 'Sin banco',
           cleanString(row.account_holder_bank) || null,
           cleanString(row.clabe_bank) || null,
-          cleanString(row.account_number_bank) || null,
+          accountNumber,
         ]
       );
       if (rows.length > 0) {
@@ -495,7 +549,13 @@ module.exports = async function phase05(v1Pool, v2Pool) {
           gen_random_uuid(), $1, $2, $3, $4,
           'active', $5, true
         )
-        ON CONFLICT ON CONSTRAINT uq_cedea_customer_branch DO NOTHING`,
+        ON CONFLICT ON CONSTRAINT uq_cedea_customer_branch DO UPDATE SET
+          contract_number = EXCLUDED.contract_number,
+          legacy_id = EXCLUDED.legacy_id,
+          status = EXCLUDED.status,
+          notes = EXCLUDED.notes,
+          is_active = EXCLUDED.is_active,
+          updated_at = NOW()`,
         [
           customerId,
           branchId,
@@ -527,10 +587,15 @@ module.exports = async function phase05(v1Pool, v2Pool) {
       const rawPlatform = (cleanString(row.type_social) || '').toLowerCase();
       const platform = PLATFORM_MAP[rawPlatform] || 'other';
 
+      // Idempotente desde mig 039: UNIQUE (customer_id, platform).
       const { rows } = await client.query(
         `INSERT INTO tonic.customer_social_profiles (
           id, customer_id, platform, profile_url, is_active
         ) VALUES (gen_random_uuid(), $1, $2, $3, true)
+        ON CONFLICT ON CONSTRAINT uq_customer_social_profiles_pair DO UPDATE SET
+          profile_url = EXCLUDED.profile_url,
+          is_active = EXCLUDED.is_active,
+          updated_at = NOW()
         RETURNING id`,
         [customerId, platform, cleanString(row.url_social) || '']
       );

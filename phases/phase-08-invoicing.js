@@ -87,7 +87,8 @@ module.exports = async function phase08(v1Pool, v2Pool) {
           tax_amount = EXCLUDED.tax_amount,
           total = EXCLUDED.total,
           sat_uuid = EXCLUDED.sat_uuid,
-          xml_file_path = EXCLUDED.xml_file_path,
+          xml_file_path = CASE WHEN tonic.invoices.xml_file_path LIKE 'https://storage.googleapis.com/%'
+                               THEN tonic.invoices.xml_file_path ELSE EXCLUDED.xml_file_path END,
           pdf_file_path = EXCLUDED.pdf_file_path,
           provider_status = EXCLUDED.provider_status,
           stamped_at = EXCLUDED.stamped_at,
@@ -224,7 +225,8 @@ module.exports = async function phase08(v1Pool, v2Pool) {
           tax_amount = EXCLUDED.tax_amount,
           total = EXCLUDED.total,
           sat_uuid = EXCLUDED.sat_uuid,
-          xml_file_path = EXCLUDED.xml_file_path,
+          xml_file_path = CASE WHEN tonic.invoices.xml_file_path LIKE 'https://storage.googleapis.com/%'
+                               THEN tonic.invoices.xml_file_path ELSE EXCLUDED.xml_file_path END,
           pdf_file_path = EXCLUDED.pdf_file_path,
           provider_status = EXCLUDED.provider_status,
           is_active = EXCLUDED.is_active,

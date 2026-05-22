@@ -203,7 +203,10 @@ module.exports = async function phase11(v1Pool, v2Pool) {
       const { rows } = await client.query(
         `INSERT INTO tonic.vacation_rules (id, years_of_service_from, years_of_service_to, vacation_days, is_active)
          VALUES (gen_random_uuid(), $1, $2, $3, true)
-         ON CONFLICT (years_of_service_from, years_of_service_to) DO NOTHING
+         ON CONFLICT (years_of_service_from, years_of_service_to) DO UPDATE SET
+           vacation_days = EXCLUDED.vacation_days,
+           is_active = EXCLUDED.is_active,
+           updated_at = NOW()
          RETURNING id`,
         [row.range_start || row.years || 1, row.range_end || row.years || 1, row.vacation_days || 6]
       );
@@ -296,7 +299,12 @@ module.exports = async function phase11(v1Pool, v2Pool) {
         `INSERT INTO tonic.vacation_balances (
           id, employee_id, period_year, entitled_days, additional_days, used_days, is_active
         ) VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, true)
-        ON CONFLICT (employee_id, period_year) DO NOTHING
+        ON CONFLICT (employee_id, period_year) DO UPDATE SET
+          entitled_days = EXCLUDED.entitled_days,
+          additional_days = EXCLUDED.additional_days,
+          used_days = EXCLUDED.used_days,
+          is_active = EXCLUDED.is_active,
+          updated_at = NOW()
         RETURNING id`,
         [
           empResult.rows[0].id,

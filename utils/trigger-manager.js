@@ -1,10 +1,20 @@
 const logger = require('./logger');
 
 /**
- * Deshabilita TODOS los triggers en el schema tonic.
+ * Deshabilita los triggers de USUARIO en el schema tonic.
+ *
+ * Usa DISABLE TRIGGER USER (no ALL) porque el rol postgres de AlloyDB es
+ * dueño de las tablas pero NO es superuser. DISABLE TRIGGER ALL intenta
+ * tocar los triggers de sistema RI (FK constraints) y falla con
+ * "permission denied: ... is a system trigger".
+ *
+ * USER deshabilita solo triggers user-defined (audit, auto-numbering,
+ * updated_at) y deja activos los triggers RI de integridad referencial.
+ * Esto es ademas mas seguro: las FKs siguen validandose durante la
+ * migracion (las phases insertan en orden de dependencia).
  */
 async function disableAllTriggers(v2Pool) {
-  logger.info('Deshabilitando todos los triggers en schema tonic...');
+  logger.info('Deshabilitando triggers de usuario en schema tonic...');
   const { rows } = await v2Pool.query(`
     SELECT DISTINCT c.relname AS table_name
     FROM pg_trigger t
@@ -15,16 +25,17 @@ async function disableAllTriggers(v2Pool) {
   `);
 
   for (const row of rows) {
-    await v2Pool.query(`ALTER TABLE tonic."${row.table_name}" DISABLE TRIGGER ALL`);
+    await v2Pool.query(`ALTER TABLE tonic."${row.table_name}" DISABLE TRIGGER USER`);
   }
-  logger.info(`  Triggers deshabilitados en ${rows.length} tablas`);
+  logger.info(`  Triggers de usuario deshabilitados en ${rows.length} tablas`);
 }
 
 /**
- * Re-habilita TODOS los triggers en el schema tonic.
+ * Re-habilita los triggers de USUARIO en el schema tonic.
+ * Contraparte de disableAllTriggers (ver nota sobre USER vs ALL).
  */
 async function enableAllTriggers(v2Pool) {
-  logger.info('Re-habilitando todos los triggers en schema tonic...');
+  logger.info('Re-habilitando triggers de usuario en schema tonic...');
   const { rows } = await v2Pool.query(`
     SELECT DISTINCT c.relname AS table_name
     FROM pg_trigger t
@@ -35,9 +46,9 @@ async function enableAllTriggers(v2Pool) {
   `);
 
   for (const row of rows) {
-    await v2Pool.query(`ALTER TABLE tonic."${row.table_name}" ENABLE TRIGGER ALL`);
+    await v2Pool.query(`ALTER TABLE tonic."${row.table_name}" ENABLE TRIGGER USER`);
   }
-  logger.info(`  Triggers re-habilitados en ${rows.length} tablas`);
+  logger.info(`  Triggers de usuario re-habilitados en ${rows.length} tablas`);
 }
 
 /**

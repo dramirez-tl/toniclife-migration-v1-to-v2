@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git status -u)",
+      "Bash(git commit:*)",
+      "Bash(git push origin master)",
+      "Bash(git branch -m master main)",
+      "Bash(git push origin main)",
+      "Bash(git push origin --delete master)",
+      "Bash(gh api repos/dramirez-tl/toniclife-migration-v1-to-v2 -X PATCH -f default_branch=main)",
+      "Bash(git branch -u origin/main main)",
+      "Bash(npm install xlsx)",
+      "mcp__postgres__query",
+      "mcp__postgres-qa__query",
+      "mcp__filesystem__directory_tree",
+      "mcp__filesystem__list_directory_with_sizes",
+      "mcp__filesystem__list_directory",
+      "Bash(node index.js --phase 15)",
+      "Bash(grep -n \"SELECT.*FROM.*t_plan\\\\|SELECT.*FROM.*t_nivel\\\\|SELECT.*FROM.*t_generation\" phases/*.js)",
+      "Bash(find . -type f \\\\\\( -name \"*.js\" -o -name \"*.json\" \\\\\\) ! -path \"./node_modules/*\" ! -path \"./.git/*\" -exec grep -l \"mlm_rank\\\\|t_plan\\\\|t_nivel\\\\|t_generation\" {} \\\\;)"
+    ]
+  }
+}

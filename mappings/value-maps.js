@@ -11,9 +11,11 @@ const CUSTOMER_STATUS = {
 };
 
 // t_customers.id_kit → customers.kit_type
+// Mig 028 amplio CHECK para incluir 'preferente'.
 const KIT_TYPE = {
   1: 'basic',
   2: 'premium',
+  3: 'preferente',
   _default: null,
 };
 

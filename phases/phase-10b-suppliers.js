@@ -134,28 +134,39 @@ module.exports = async function phase10b(v1Pool, v2Pool) {
       const totalAmount = toDecimal(row.amount, 0);
       const fileUrl = prefixUrl(row.file_path);
 
-      // purchase_orders has no UNIQUE index on legacy_id — use NOT EXISTS for idempotency
+      // Idempotente desde mig 039: UNIQUE INDEX parcial sobre legacy_id.
       await client.query(
         `INSERT INTO tonic.purchase_orders (
           id, po_number, supplier_id, branch_id,
           currency_code, subtotal, tax_amount, total_amount,
           file_url, status, legacy_id, is_active
-        )
-        SELECT gen_random_uuid(), $1, $2, $3,
+        ) VALUES (
+          gen_random_uuid(), $1, $2, $3,
           $4, $5, $6, $7,
           $8, 'completed', $9, true
-        WHERE NOT EXISTS (
-          SELECT 1 FROM tonic.purchase_orders WHERE legacy_id = $9
-        )`,
+        )
+        ON CONFLICT (legacy_id) WHERE legacy_id IS NOT NULL DO UPDATE SET
+          po_number = EXCLUDED.po_number,
+          supplier_id = EXCLUDED.supplier_id,
+          branch_id = EXCLUDED.branch_id,
+          currency_code = EXCLUDED.currency_code,
+          subtotal = EXCLUDED.subtotal,
+          tax_amount = EXCLUDED.tax_amount,
+          total_amount = EXCLUDED.total_amount,
+          file_url = CASE WHEN tonic.purchase_orders.file_url LIKE 'https://storage.googleapis.com/%'
+                          THEN tonic.purchase_orders.file_url ELSE EXCLUDED.file_url END,
+          status = EXCLUDED.status,
+          is_active = EXCLUDED.is_active,
+          updated_at = NOW()`,
         [
           `PO-${row.id}`,
           supplierResult.rows[0].id,
-          branchId,                     // branch_id — default branch
-          'MXN',                        // currency_code — default
-          totalAmount,                  // subtotal  ← amount (only column available)
-          0,                            // tax_amount — not available in v1
-          totalAmount,                  // total_amount ← amount (only column available)
-          fileUrl,                  // file_url ← file_path
+          branchId,
+          'MXN',
+          totalAmount,
+          0,
+          totalAmount,
+          fileUrl,
           row.id,
         ]
       );

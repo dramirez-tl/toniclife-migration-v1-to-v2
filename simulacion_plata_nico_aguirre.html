@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>Simulación de Rango — Nico Aguirre #1871</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'Segoe UI', Arial, sans-serif; color: #2d3748; background: #fff; padding: 40px; max-width: 900px; margin: 0 auto; }
+
+    .header { background: linear-gradient(135deg, #2d3748 0%, #4a5568 100%); color: #fff; padding: 24px 32px; border-radius: 8px; margin-bottom: 32px; }
+    .header h1 { font-size: 26px; letter-spacing: 2px; margin-bottom: 4px; }
+    .header .subtitle { display: flex; justify-content: space-between; align-items: center; }
+    .header .rank-badge { background: #805ad5; padding: 6px 18px; border-radius: 4px; font-weight: 700; font-size: 18px; }
+    .header .name { font-size: 16px; opacity: 0.95; }
+    .header .date { font-size: 13px; opacity: 0.7; }
+
+    h2 { font-size: 18px; color: #2d3748; margin: 28px 0 14px; border-bottom: 2px solid #e2e8f0; padding-bottom: 6px; }
+
+    table { width: 100%; border-collapse: collapse; margin: 12px 0 20px; font-size: 14px; }
+    th { background: #edf2f7; padding: 10px 14px; text-align: left; font-weight: 600; border: 1px solid #e2e8f0; }
+    td { padding: 10px 14px; border: 1px solid #e2e8f0; }
+    tr:nth-child(even) { background: #f7fafc; }
+
+    .check { color: #38a169; font-weight: 700; }
+    .fail { color: #e53e3e; font-weight: 700; }
+    .neutral { color: #718096; }
+
+    .problem-box { background: #fff5f5; border: 2px solid #fc8181; border-radius: 8px; padding: 20px 24px; margin: 20px 0; }
+    .problem-box .label { color: #e53e3e; font-weight: 700; font-size: 15px; margin-bottom: 8px; }
+    .problem-box p { font-size: 14px; line-height: 1.6; }
+    .problem-box strong { color: #c53030; }
+
+    .opportunity-box { background: #f0fff4; border: 2px solid #68d391; border-radius: 8px; padding: 20px 24px; margin: 20px 0; }
+    .opportunity-box .label { color: #276749; font-weight: 700; font-size: 15px; margin-bottom: 8px; }
+    .opportunity-box p { font-size: 14px; line-height: 1.6; }
+    .opportunity-box strong { color: #22543d; }
+
+    .scenario { background: #fafafa; border-radius: 8px; padding: 24px; margin: 20px 0; border: 1px solid #e2e8f0; }
+    .scenario h3 { font-size: 17px; margin-bottom: 12px; }
+    .scenario ul { margin: 10px 0 16px 20px; font-size: 14px; line-height: 1.8; }
+
+    .total-row { background: #2d3748 !important; color: #fff; font-weight: 700; }
+    .total-row td { border-color: #2d3748; }
+
+    .highlight-row { background: #f0fff4 !important; }
+    .highlight-row td { font-weight: 600; }
+
+    .plata-row { background: #faf5ff !important; }
+    .plata-row td { font-weight: 700; color: #6b46c1; }
+
+    .summary-box { background: linear-gradient(135deg, #2d3748 0%, #4a5568 100%); color: #fff; border-radius: 8px; padding: 24px 28px; margin: 28px 0; }
+    .summary-box h3 { font-size: 17px; margin-bottom: 12px; color: #fbd38d; }
+    .summary-box p { font-size: 14px; line-height: 1.8; }
+    .summary-box .money { color: #68d391; font-weight: 700; font-size: 16px; }
+    .summary-box .money-warn { color: #fc8181; font-weight: 700; font-size: 16px; }
+
+    .tree-box { background: #edf2f7; border-radius: 8px; padding: 18px 24px; margin: 16px 0; font-size: 13px; line-height: 1.7; font-family: 'Consolas', monospace; }
+    .tree-box .leg-label { font-weight: 700; color: #2d3748; }
+    .tree-box .vol { color: #805ad5; font-weight: 600; }
+    .tree-box .cap { color: #e53e3e; font-size: 11px; }
+
+    .footer { text-align: center; font-size: 11px; color: #a0aec0; margin-top: 40px; padding-top: 16px; border-top: 1px solid #e2e8f0; }
+
+    @media print {
+      body { padding: 20px; }
+      .scenario, .problem-box, .opportunity-box, .summary-box { break-inside: avoid; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- HEADER -->
+  <div class="header">
+    <h1>SIMULACI&Oacute;N DE RANGO</h1>
+    <div class="subtitle">
+      <div>
+        <span class="rank-badge">&#9632; PLATA</span>
+        <span class="name" style="margin-left: 12px;">NICOLAS AGUIRRE RAMOS &bull; #1871</span>
+      </div>
+      <span class="date">Datos reales: Marzo 2026</span>
+    </div>
+  </div>
+
+  <!-- ESTADO ACTUAL -->
+  <h2>Situaci&oacute;n actual &mdash; Marzo 2026</h2>
+  <table>
+    <tr><th>Indicador</th><th>Valor</th></tr>
+    <tr><td>Rango actual</td><td><strong>Sin rango asignado</strong> (id_plan = null)</td></tr>
+    <tr><td>Compra personal</td><td><strong>$3,813</strong> pts</td></tr>
+    <tr><td>N1 directos (por sponsor)</td><td>72</td></tr>
+    <tr><td>N1 calificados (&ge;3,300 VN)</td><td><strong>1</strong> &mdash; Atahualpa Orozco ($3,390)</td></tr>
+    <tr><td>Volumen total de red</td><td><strong>$1,083,594</strong></td></tr>
+    <tr><td>Comisiones actuales</td><td><strong>$2,515.30</strong> /mes (ML1 $708 + ML2 $1,807)</td></tr>
+    <tr><td>Sucursal</td><td>MX 5E Indios Verdes / MX 17Q CDMX Roma (MXN)</td></tr>
+  </table>
+
+  <!-- PIERNAS -->
+  <h2>Estructura de piernas con volumen</h2>
+  <div class="tree-box">
+    <div><span class="leg-label">Pierna 1 &mdash; Atahualpa Orozco (#29149)</span>: <span class="vol">$1,075,849</span> <span class="cap">(99.3% del vol total)</span></div>
+    <div style="margin-left: 24px;">&#9492; Cirila C. Villegas (#29917): <span class="vol">$943,440</span></div>
+    <div style="margin-left: 48px;">&#9492; Nicte Nayeli Orozco: $506,389</div>
+    <div style="margin-left: 48px;">&#9492; Catalina Zavala: $224,304</div>
+    <div style="margin-left: 48px;">&#9492; Jazm&iacute;n Aguayo: $132,664</div>
+    <div style="margin-left: 48px;">&#9492; + 12 sub-piernas m&aacute;s</div>
+    <div style="margin-left: 24px;">&#9492; Jos&eacute; Antonio Palmer: <span class="vol">$49,290</span></div>
+    <div style="margin-left: 24px;">&#9492; Ma. Guadalupe Aguilar: <span class="vol">$28,736</span></div>
+    <div style="margin-left: 24px;">&#9492; + 12 sub-piernas m&aacute;s</div>
+    <br>
+    <div><span class="leg-label">Pierna 2 &mdash; Oscar Daniel Caballero (#7741)</span>: <span class="vol">$6,087</span></div>
+    <div><span class="leg-label">Pierna 3 &mdash; Adriana Villamar (#1732796)</span>: <span class="vol">$1,658</span></div>
+  </div>
+
+  <!-- REQUISITOS -->
+  <h2>&iquest;Qu&eacute; necesita para llegar a Plata?</h2>
+  <table>
+    <tr><th>Requisito</th><th>Necesita</th><th>Actualmente</th><th>Qu&eacute; falta</th></tr>
+    <tr>
+      <td>Puntos personales</td>
+      <td><strong>3,300</strong></td>
+      <td class="check">3,813 &check;</td>
+      <td class="check">Ya cumple</td>
+    </tr>
+    <tr>
+      <td>Calificados N1 (&ge;3,300 VN)</td>
+      <td><strong>3</strong></td>
+      <td class="fail">1</td>
+      <td class="fail">Activar 2 patitas m&aacute;s</td>
+    </tr>
+    <tr>
+      <td>Roll Over grupal</td>
+      <td><strong>170,000</strong></td>
+      <td class="check">207,745 &check;</td>
+      <td class="check">Ya cumple</td>
+    </tr>
+    <tr>
+      <td>Roll Over cap Plata</td>
+      <td>200,000/pierna</td>
+      <td class="neutral">&mdash;</td>
+      <td class="neutral">&mdash;</td>
+    </tr>
+  </table>
+  <p style="font-size:13px; color:#718096; margin-top:-12px;">
+    Roll over con cap Plata: Atahualpa min($1,075,849, $200,000) = $200,000 + Oscar $6,087 + Adriana $1,658 = <strong>$207,745</strong>
+  </p>
+
+  <!-- PROBLEMA PRINCIPAL -->
+  <div class="problem-box">
+    <div class="label">&#9632; PROBLEMA PRINCIPAL</div>
+    <p>
+      Nico solo tiene <strong>1 N1 calificado</strong> (Atahualpa Orozco con $3,390) de los <strong>3 necesarios</strong> para Plata.
+      Tiene 72 N1 directos pero solo 1 compra lo suficiente. El volumen de su red es impresionante
+      (<strong>$1.08M</strong>) pero est&aacute; concentrado en <strong>1 sola pierna</strong> (Atahualpa = 99.3%).
+    </p>
+    <p style="margin-top:8px;">
+      Adem&aacute;s, <strong>nadie en su red tiene rango asignado</strong> en el sistema, pero si se calcularan,
+      Atahualpa calificar&iacute;a como <strong>Oro</strong> (6 N1 calificados, $729K roll over) y Cirila Villegas
+      como <strong>Oro</strong> (8 N1 calificados, $924K roll over).
+    </p>
+  </div>
+
+  <!-- OPORTUNIDAD -->
+  <div class="opportunity-box">
+    <div class="label">&#9632; OPORTUNIDAD OCULTA</div>
+    <p>
+      Debajo de Nico hay una <strong>red monstruosa</strong> con l&iacute;deres activos que ya califican para rangos altos.
+      Atahualpa tiene <strong>6 N1 calificados</strong> y Cirila tiene <strong>8 N1 calificados</strong>.
+      Si el sistema reconociera estos rangos, Nico desbloquear&iacute;a <strong>bonos de generaci&oacute;n masivos</strong>.
+    </p>
+  </div>
+
+  <!-- ESCENARIO SIMULADO: PLATA -->
+  <div class="scenario">
+    <h3>Escenario simulado: Nico llega a Plata</h3>
+    <p><strong>Supuestos:</strong></p>
+    <ul>
+      <li>Nico ya compra <strong>$3,813 pts personales</strong> &check;</li>
+      <li><strong>2 de sus N1 m&aacute;s</strong> compran &ge;$3,300 pts cada uno (adem&aacute;s de Atahualpa que ya lo hace con $3,390)</li>
+      <li>Roll over grupal ya cumple: <strong>$207,745 &ge; 170,000</strong> &check;</li>
+      <li>Atahualpa es reconocido como <strong>Oro</strong> (cumple: $3,390 personal, 6 N1 calificados, $729K roll over)</li>
+    </ul>
+
+    <p><strong>Comisiones como Plata &mdash; Marzo 2026:</strong></p>
+    <table>
+      <tr><th>Concepto</th><th>C&aacute;lculo</th><th style="text-align:right;">Monto</th></tr>
+      <tr>
+        <td>ML1 (15%) &mdash; Nivel 1</td>
+        <td>15% &times; $11,323 *</td>
+        <td style="text-align:right;"><strong>$1,698.45</strong></td>
+      </tr>
+      <tr>
+        <td>ML2 (5%) &mdash; Nivel 2</td>
+        <td>5% &times; $36,137</td>
+        <td style="text-align:right;"><strong>$1,806.85</strong></td>
+      </tr>
+      <tr>
+        <td>Generaci&oacute;n 0 (4%) &mdash; Atahualpa Orozco (Oro)</td>
+        <td>4% &times; $729,019</td>
+        <td style="text-align:right;"><strong>$29,160.76</strong></td>
+      </tr>
+      <tr class="total-row">
+        <td colspan="2">TOTAL ESTIMADO COMO PLATA</td>
+        <td style="text-align:right; font-size:16px;">$32,666.06</td>
+      </tr>
+    </table>
+    <p style="font-size:12px; color:#718096; margin-top:-8px;">
+      * ML1 incluye: Atahualpa ($3,301) + Adriana ($1,422) + 2 nuevos N1 ($3,300 &times; 2 = $6,600) = $11,323<br>
+      Plata tiene <strong>generation_max = 1</strong>, as&iacute; que cobra Gen 0 (4%) sobre el roll over de su primer l&iacute;der calificado
+      (Atahualpa, que califica como Oro con $729,019 de roll over).
+    </p>
+  </div>
+
+  <!-- ESCENARIO ORO -->
+  <div class="scenario">
+    <h3>Escenario simulado: Nico llega a Oro</h3>
+    <p><strong>Supuestos adicionales:</strong></p>
+    <ul>
+      <li><strong>4 N1 calificados</strong> (1 m&aacute;s que para Plata)</li>
+      <li>Roll over grupal &ge; 500,000 &mdash; con cap Oro ($600K/pierna): Atahualpa $600,000 + Oscar $6,087 + Adriana $1,658 + nuevo N1 = <strong>$610,745+</strong> &check;</li>
+      <li>Cirila Villegas es reconocida como <strong>Oro</strong> (8 N1 calificados, $924K roll over)</li>
+    </ul>
+
+    <table>
+      <tr><th>Concepto</th><th>C&aacute;lculo</th><th style="text-align:right;">Monto</th></tr>
+      <tr>
+        <td>ML1 (15%) &mdash; Nivel 1</td>
+        <td>15% &times; $14,623 *</td>
+        <td style="text-align:right;"><strong>$2,193.45</strong></td>
+      </tr>
+      <tr>
+        <td>ML2 (5%) &mdash; Nivel 2</td>
+        <td>5% &times; $36,137</td>
+        <td style="text-align:right;"><strong>$1,806.85</strong></td>
+      </tr>
+      <tr>
+        <td>Gen 0 (4%) &mdash; Atahualpa Orozco (Oro)</td>
+        <td>4% &times; $729,019</td>
+        <td style="text-align:right;"><strong>$29,160.76</strong></td>
+      </tr>
+      <tr>
+        <td>Gen 1 (5%) &mdash; Cirila Villegas (Oro)</td>
+        <td>5% &times; $924,014</td>
+        <td style="text-align:right;"><strong>$46,200.70</strong></td>
+      </tr>
+      <tr class="total-row">
+        <td colspan="2">TOTAL ESTIMADO COMO ORO</td>
+        <td style="text-align:right; font-size:16px;">$79,361.76</td>
+      </tr>
+    </table>
+    <p style="font-size:12px; color:#718096; margin-top:-8px;">
+      * ML1 incluye 4 N1 calificados: Atahualpa ($3,301) + Adriana ($1,422) + 3 nuevos N1 ($3,300 &times; 3) = $14,623<br>
+      Oro tiene <strong>generation_max = 2</strong>: cobra Gen 0 (4%) sobre Atahualpa + Gen 1 (5%) sobre Cirila Villegas.
+    </p>
+  </div>
+
+  <!-- COMPARATIVO -->
+  <h2>Comparativo por rango &mdash; Simulaci&oacute;n Marzo 2026</h2>
+  <table>
+    <tr><th>Rango</th><th>ML1</th><th>ML2</th><th>Generaciones</th><th style="text-align:right;">Total estimado</th></tr>
+    <tr>
+      <td>Sin rango (actual)</td>
+      <td>$708.45</td>
+      <td>$1,806.85</td>
+      <td>$0</td>
+      <td style="text-align:right;"><strong>$2,515.30</strong></td>
+    </tr>
+    <tr>
+      <td>Distribuidor</td>
+      <td>$708.45</td>
+      <td>$1,806.85</td>
+      <td>$0 (sin gen)</td>
+      <td style="text-align:right;"><strong>$2,515.30</strong></td>
+    </tr>
+    <tr>
+      <td>Bronce (+2 N1 calif.)</td>
+      <td>$1,698.45</td>
+      <td>$1,806.85</td>
+      <td>$0 (sin gen)</td>
+      <td style="text-align:right;"><strong>$3,505.30</strong></td>
+    </tr>
+    <tr class="plata-row">
+      <td>&#9632; Plata (+2 N1 calif.)</td>
+      <td>$1,698.45</td>
+      <td>$1,806.85</td>
+      <td>Gen 0: $29,160.76</td>
+      <td style="text-align:right;"><strong>~$32,666</strong></td>
+    </tr>
+    <tr class="highlight-row">
+      <td>Oro (+3 N1 calif.)</td>
+      <td>$2,193.45</td>
+      <td>$1,806.85</td>
+      <td>Gen 0+1: $75,361.46</td>
+      <td style="text-align:right;"><strong>~$79,362</strong></td>
+    </tr>
+  </table>
+
+  <!-- RESUMEN -->
+  <div class="summary-box">
+    <h3>RESUMEN</h3>
+    <p>
+      El salto de <strong>Bronce a Plata</strong> es enorme porque desbloquea la <strong>Generaci&oacute;n 0 al 4%</strong>.
+      Debajo de Nico hay un Atahualpa Orozco que califica como Oro con <strong>$729,019 de roll over</strong>,
+      lo que significa que esa sola generaci&oacute;n vale <span class="money">~$29,000 MXN mensuales</span>.
+    </p>
+    <p style="margin-top: 12px;">
+      Lo que Nico deja en la mesa cada mes por no tener <strong>2 patitas m&aacute;s activas</strong>:
+      <span class="money-warn">m&aacute;s de $30,000 en comisiones</span>.
+    </p>
+    <p style="margin-top: 12px;">
+      Y si escalara a <strong>Oro</strong> (necesitar&iacute;a 4 calificados y cap de $600K/pierna), cobrar&iacute;a
+      generaciones sobre Atahualpa (Oro) <em>y</em> Cirila Villegas (Oro, $924K roll over),
+      superando los <span class="money">$79,000 mensuales</span> &mdash; un salto de
+      <strong>31&times;</strong> respecto a lo que cobra hoy ($2,515).
+    </p>
+  </div>
+
+  <!-- DETALLE DE LÍDERES EN LA RED -->
+  <h2>L&iacute;deres potenciales en la red (si se calcularan rangos)</h2>
+  <table>
+    <tr><th>L&iacute;der</th><th>Profundidad</th><th>Compra personal</th><th>N1 calif.</th><th>Roll over (Oro cap)</th><th>Rango potencial</th></tr>
+    <tr>
+      <td><strong>Atahualpa Orozco</strong> #29149</td>
+      <td>N1 de Nico</td>
+      <td>$3,390</td>
+      <td>6</td>
+      <td>$729,019</td>
+      <td><strong>Oro</strong></td>
+    </tr>
+    <tr>
+      <td><strong>Cirila C. Villegas</strong> #29917</td>
+      <td>N2 de Nico</td>
+      <td>$4,441</td>
+      <td>8</td>
+      <td>$924,014</td>
+      <td><strong>Oro</strong></td>
+    </tr>
+  </table>
+
+  <!-- HISTORIAL -->
+  <h2>Historial de comisiones de Nico (como parent)</h2>
+  <table>
+    <tr><th>Periodo</th><th style="text-align:right;">Comisi&oacute;n total</th><th>Registros</th></tr>
+    <tr><td>Marzo 2026</td><td style="text-align:right;"><strong>$2,515.30</strong></td><td>13</td></tr>
+    <tr><td>Febrero 2026</td><td style="text-align:right;">$2,212.70</td><td>14</td></tr>
+    <tr><td>Enero 2026</td><td style="text-align:right;">$2,088.80</td><td>12</td></tr>
+    <tr><td>Diciembre 2025</td><td style="text-align:right;">$1,961.25</td><td>14</td></tr>
+    <tr><td>Noviembre 2025</td><td style="text-align:right;">$2,234.15</td><td>13</td></tr>
+    <tr><td>Octubre 2025</td><td style="text-align:right;">$2,212.70</td><td>16</td></tr>
+  </table>
+  <p style="font-size:13px; color:#718096; margin-top:4px;">
+    Promedio mensual actual: <strong>~$2,204 MXN</strong> &mdash; consistentemente ML1 + ML2 sin generaciones.
+  </p>
+
+  <!-- FOOTER -->
+  <div class="footer">
+    Simulaci&oacute;n generada con datos reales de Marzo 2026 &bull; Uso interno
+  </div>
+
+</body>
+</html>

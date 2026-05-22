@@ -85,11 +85,23 @@ module.exports = async function phase13(v1Pool, v2Pool) {
     },
 
     buildInsertSQL: (transformedRows) => {
+      // Idempotente desde mig 039: UNIQUE INDEX parcial sobre
+      // ((metadata->>'legacy_id')) WHERE metadata->>'legacy_id' IS NOT NULL.
+      // Re-runs hacen UPDATE en filas migradas (con legacy_id) y dejan
+      // intactos los logs reales generados por la app (sin legacy_id).
       return buildMultiRowInsertWithUUID(
         'tonic.access_logs',
         ['user_id', 'username', 'action', 'ip_address', 'user_agent', 'device_type', 'session_id', 'metadata', 'created_at'],
         transformedRows,
-        '',
+        `ON CONFLICT ((metadata->>'legacy_id')) WHERE (metadata->>'legacy_id') IS NOT NULL DO UPDATE SET
+          user_id = EXCLUDED.user_id,
+          username = EXCLUDED.username,
+          action = EXCLUDED.action,
+          ip_address = EXCLUDED.ip_address,
+          user_agent = EXCLUDED.user_agent,
+          device_type = EXCLUDED.device_type,
+          session_id = EXCLUDED.session_id,
+          created_at = EXCLUDED.created_at`,
         { ip_address: 'inet', metadata: 'jsonb' }
       );
     },
@@ -127,7 +139,19 @@ module.exports = async function phase13(v1Pool, v2Pool) {
           $5, $6, $7, $8,
           $9, $10, true
         )
-        ON CONFLICT DO NOTHING`,
+        ON CONFLICT (code) DO UPDATE SET
+          name = EXCLUDED.name,
+          file_type = EXCLUDED.file_type,
+          url = CASE WHEN tonic.system_files.url LIKE 'https://storage.googleapis.com/%'
+                     THEN tonic.system_files.url ELSE EXCLUDED.url END,
+          mime_type = EXCLUDED.mime_type,
+          file_size = EXCLUDED.file_size,
+          module = EXCLUDED.module,
+          description = EXCLUDED.description,
+          sort_order = EXCLUDED.sort_order,
+          legacy_id = EXCLUDED.legacy_id,
+          is_active = EXCLUDED.is_active,
+          updated_at = NOW()`,
         [
           code,
           cleanString(row.name_file) || code,
@@ -180,7 +204,12 @@ module.exports = async function phase13(v1Pool, v2Pool) {
           gen_random_uuid(), $1, $2, $3::jsonb, $4,
           $5, false, true
         )
-        ON CONFLICT DO NOTHING`,
+        ON CONFLICT (category, key) DO UPDATE SET
+          value = EXCLUDED.value,
+          value_type = EXCLUDED.value_type,
+          description = EXCLUDED.description,
+          is_active = EXCLUDED.is_active,
+          updated_at = NOW()`,
         [category, key, jsonValue, valueType, cleanString(row.description_text)]
       );
     },
