@@ -19,8 +19,11 @@ module.exports = async function phase05(v1Pool, v2Pool) {
   // Resolver defaults para NOT NULL
   // Default branch: legacy id_branch_office = 1 (MX CALL CENTER)
   const defaultBranchId = await idResolver.resolve(v2Pool, 'branch', 1);
-  // Default price_type: legacy id_type_price = 1 (Distribuidor)
-  const defaultPriceTypeId = await idResolver.resolve(v2Pool, 'price_type', 1);
+  // Default price_type: 'distributor' resuelto por code del catálogo real de v2.
+  // El mapeo legacy de price_type quedó desalineado tras el reseed de catálogos
+  // (apunta a UUIDs inexistentes), por eso se usa el code estable del catálogo.
+  const dptRes = await v2Pool.query("SELECT id FROM tonic.price_types WHERE code = 'distributor' LIMIT 1");
+  const defaultPriceTypeId = dptRes.rows[0] ? dptRes.rows[0].id : null;
 
   if (!defaultBranchId) {
     logger.error('  No se encontró branch default (legacy_id=1). Abortando fase 05.');
@@ -168,7 +171,9 @@ module.exports = async function phase05(v1Pool, v2Pool) {
 
       // Resolver FKs
       const branchId = await idResolver.resolve(v2Pool, 'branch', row.id_branch_office) || defaultBranchId;
-      const priceTypeId = await idResolver.resolve(v2Pool, 'price_type', row.id_type_price) || defaultPriceTypeId;
+      // Todos los clientes v1 son distribuidores y el mapeo legacy de price_type
+      // está desalineado, así que se usa el price_type 'distributor' del catálogo.
+      const priceTypeId = defaultPriceTypeId;
       const rankId = await idResolver.resolve(v2Pool, 'mlm_rank', row.id_plan, 'mlm_ranks');
       const countryId = await idResolver.resolve(v2Pool, 'country', row.id_country);
       const satTaxRegimeId = await idResolver.resolve(v2Pool, 'sat_tax_regime', row.id_regimen, 'sat_tax_regimes');
