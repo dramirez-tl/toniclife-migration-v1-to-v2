@@ -43,8 +43,12 @@ module.exports = {
   },
 
   progress: (tableName, current, total) => {
-    const pct = ((current / total) * 100).toFixed(1);
-    const bar = '█'.repeat(Math.floor(current / total * 30)) + '░'.repeat(30 - Math.floor(current / total * 30));
+    // Clamp al rango [0,1]: si el conteo real supera el total estimado, evita
+    // que '░'.repeat() reciba un negativo (RangeError: Invalid count value).
+    const ratio = total > 0 ? Math.min(Math.max(current / total, 0), 1) : 1;
+    const pct = (ratio * 100).toFixed(1);
+    const filled = Math.floor(ratio * 30);
+    const bar = '█'.repeat(filled) + '░'.repeat(30 - filled);
     process.stdout.write(`\r    ${tableName}: ${current.toLocaleString()} / ${total.toLocaleString()} (${pct}%) ${bar}`);
     if (current >= total) process.stdout.write('\n');
   },
