@@ -65,15 +65,16 @@ module.exports = async function phase05(v1Pool, v2Pool) {
           is_active = EXCLUDED.is_active,
           updated_at = NOW()`,
         [
+          // v1 t_plan: point_personal, point_group, qualifiers_first_level, nivel_max, generation_max
           code,
           row.name_plan || code,
-          row.order_plan || row.id_plan,
           row.id_plan,
-          toDecimal(row.points_plan, 0),
-          toDecimal(row.points_group_plan, 0),
-          row.qualifiers_plan || 0,
-          row.level_max_plan || null,
-          row.generation_max_plan || 0,
+          row.id_plan,
+          toDecimal(row.point_personal, 0),
+          toDecimal(row.point_group, 0),
+          row.qualifiers_first_level || 0,
+          row.nivel_max || null,
+          row.generation_max || 0,
         ]
       );
     },
@@ -102,11 +103,12 @@ module.exports = async function phase05(v1Pool, v2Pool) {
           is_active = EXCLUDED.is_active,
           updated_at = NOW()`,
         [
-          row.number_nivel || row.id_nivel,
-          row.name_nivel || `Nivel ${row.id_nivel}`,
-          toDecimal(row.percentage_nivel, 0),
-          toDecimal(row.percentage_upgraded_nivel, 0),
-          row.qualifiers_nivel || 0,
+          // v1 t_nivel: id_nivel, description_nivel, percentage, qty_qualifers, percentage_up
+          row.id_nivel,
+          row.description_nivel || `Nivel ${row.id_nivel}`,
+          toDecimal(row.percentage, 0),
+          toDecimal(row.percentage_up, 0),
+          row.qty_qualifers || 0,
           row.id_nivel,
         ]
       );
@@ -130,8 +132,9 @@ module.exports = async function phase05(v1Pool, v2Pool) {
           is_active = EXCLUDED.is_active,
           updated_at = NOW()`,
         [
-          row.number_generation || row.id_generation,
-          toDecimal(row.percentage_generation, 0),
+          // v1 t_generation tiene columnas `number` y `percentage` (no *_generation)
+          row.number != null ? row.number : row.id_generation,
+          toDecimal(row.percentage, 0),
           row.id_generation,
         ]
       );
