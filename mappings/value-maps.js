@@ -12,7 +12,12 @@ const CUSTOMER_STATUS = {
 
 // t_customers.id_kit → customers.kit_type
 // Mig 028 amplio CHECK para incluir 'preferente'.
+// OJO: v1 guarda TEXTO en id_kit ('basico' / 'premium'), no 1/2/3.
 const KIT_TYPE = {
+  'basico': 'basic',
+  'premium': 'premium',
+  'preferente': 'preferente',
+  // compat numérico (por si alguna fila antigua usa códigos)
   1: 'basic',
   2: 'premium',
   3: 'preferente',
