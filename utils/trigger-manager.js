@@ -136,6 +136,16 @@ async function createMissingUniqueIndexes(v2Pool) {
       sql: `CREATE UNIQUE INDEX IF NOT EXISTS uq_network_branch_assignments_legacy_id
             ON tonic.network_branch_assignments(legacy_id) WHERE legacy_id IS NOT NULL`,
     },
+    {
+      name: 'uq_job_positions_legacy_id',
+      sql: `CREATE UNIQUE INDEX IF NOT EXISTS uq_job_positions_legacy_id
+            ON tonic.job_positions(legacy_id) WHERE legacy_id IS NOT NULL`,
+    },
+    {
+      name: 'uq_work_areas_legacy_id',
+      sql: `CREATE UNIQUE INDEX IF NOT EXISTS uq_work_areas_legacy_id
+            ON tonic.work_areas(legacy_id) WHERE legacy_id IS NOT NULL`,
+    },
   ];
 
   for (const idx of indexes) {

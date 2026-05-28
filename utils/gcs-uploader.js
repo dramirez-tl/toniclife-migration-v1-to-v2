@@ -346,8 +346,27 @@ async function replaceFileVersioned(rawFilePath, gcsFolder, canonicalName) {
 
   await semaphore.acquire();
   try {
+    // 1. Subir el nuevo (forzar overwrite). Si falla, no tocar lo viejo.
     const result = await downloadAndUploadForce(sourceUrl, gcsPath, config.gcs.retryAttempts);
-    return result || prefixUrl(rawFilePath);
+    if (!result) return prefixUrl(rawFilePath);
+
+    // 2. Borrado DEFINITIVO de huerfanos: objetos del MISMO legacy_id con otra
+    // extension (ej. img-5.jpg cuando ahora es img-5.png). El prefijo + regex
+    // exacta evitan tocar otras imagenes del producto y el falso match
+    // img-5 vs img-50. 14c queda como red de seguridad.
+    try {
+      const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const re = new RegExp(`^${esc(folder)}/${esc(canonicalName)}\\.[^/]+$`);
+      const [existing] = await bucket.getFiles({ prefix: `${folder}/${canonicalName}.` });
+      const toDelete = existing.filter(f => re.test(f.name) && f.name !== gcsPath);
+      if (toDelete.length > 0) {
+        await Promise.allSettled(toDelete.map(f => f.delete()));
+      }
+    } catch (_) {
+      // Si falla el borrado de viejos, no es fatal: 14c los limpia luego.
+    }
+
+    return result;
   } catch (err) {
     stats.failed++;
     return prefixUrl(rawFilePath);

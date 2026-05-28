@@ -250,7 +250,8 @@ module.exports = async function phase05(v1Pool, v2Pool) {
           nss = EXCLUDED.nss,
           rank_id = EXCLUDED.rank_id,
           current_rank_id = EXCLUDED.current_rank_id,
-          customer_type = EXCLUDED.customer_type,
+          -- customer_type NO se sobrescribe: preserva reclasificaciones manuales
+          -- (final_customer/preferred_customer) hechas desde admin V2.
           status = EXCLUDED.status,
           kit_type = EXCLUDED.kit_type,
           branch_id = EXCLUDED.branch_id,
