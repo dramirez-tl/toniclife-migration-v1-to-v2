@@ -292,7 +292,7 @@ Transformaciones clave para `customers`:
 - **2 pasos**: INSERT sin `sponsor_id`/`upline_id`, luego UPDATE (FKs auto-referenciales)
 - **5 documentos a GCS**: photo, contract, INE, bank_statement, tax_id
 - `status`: id_status 1→active, 2→inactive, 3→suspended, otro→pending
-- `kit_type`: 1→basic, 2→premium
+- `kit_type`: 1→basic, 2→premium, 3→preferred
 - `language_code`: id_language 1→es, 2→en
 - Defaults: `branch_id` → legacy 1, `price_type_id` → legacy 1
 - Post-step: UPDATE `users.customer_id` para vincular usuarios con clientes

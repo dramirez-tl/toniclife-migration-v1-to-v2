@@ -6,7 +6,7 @@ const VALID_VALUES = {
   'orders.status': ['pending', 'confirmed', 'cancelled', 'returned', 'transferred'],
   'customers.customer_type': ['distributor', 'final_customer', 'preferred_customer'],
   'customers.status': ['active', 'inactive', 'suspended', 'pending'],
-  'customers.kit_type': ['basic', 'premium', null],
+  'customers.kit_type': ['basic', 'premium', 'preferred', null],
   'products.product_type': ['finished_good', 'raw_material', 'kit', 'service', 'promotional', 'material'],
   'employees.status': ['active', 'inactive', 'on_leave', 'terminated'],
   'employees.contract_type': ['permanent', 'temporary', 'trial_period', 'initial_training'],

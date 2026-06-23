@@ -6,12 +6,12 @@ const config = require('../config');
 
 // ============================================================================
 // Mapping de v1 type_kit (basico/premium/preferente) -> v2 products.kit_position
-// (mig 028: CHECK kit_position IN ('basic','premium','preferente') OR NULL)
+// (mig 074: CHECK kit_position IN ('basic','premium','preferred') OR NULL)
 // ============================================================================
 const KIT_POSITION_MAP = {
   basico: 'basic',
   premium: 'premium',
-  preferente: 'preferente',
+  preferente: 'preferred',
 };
 
 // ============================================================================
@@ -224,7 +224,7 @@ module.exports = async function phase04(v1Pool, v2Pool) {
       // kit_position: derivado de v1 t_product.type_kit
       //   basico    -> 'basic'
       //   premium   -> 'premium'
-      //   preferente -> 'preferente'
+      //   preferente -> 'preferred'
       // Mig 028 agrego esta columna. Sin trigger que la haga obligatoria,
       // pero la poblamos para data quality.
       let kitPosition = null;

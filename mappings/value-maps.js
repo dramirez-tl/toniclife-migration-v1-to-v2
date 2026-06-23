@@ -10,17 +10,18 @@ const CUSTOMER_STATUS = {
   _default: 'pending',
 };
 
-// t_customers.id_kit → customers.kit_type
-// Mig 028 amplio CHECK para incluir 'preferente'.
+// t_customers.id_kit → customers.kit_type (rango)
+// Mig 028 amplio CHECK para incluir el rango 'preferente'; mig 074 lo
+// renombro a 'preferred' (set de rango 100% en ingles: basic/premium/preferred).
 // OJO: v1 guarda TEXTO en id_kit ('basico' / 'premium'), no 1/2/3.
 const KIT_TYPE = {
   'basico': 'basic',
   'premium': 'premium',
-  'preferente': 'preferente',
+  'preferente': 'preferred',
   // compat numérico (por si alguna fila antigua usa códigos)
   1: 'basic',
   2: 'premium',
-  3: 'preferente',
+  3: 'preferred',
   _default: null,
 };
 
